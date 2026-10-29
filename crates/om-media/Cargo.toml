@@ -1,0 +1,13 @@
+[package]
+name = "om-media"
+description = "NawsMapper media decoding: MP4/H.264 video on a background thread"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mp4.workspace = true
+openh264.workspace = true
+anyhow.workspace = true
+log.workspace = true

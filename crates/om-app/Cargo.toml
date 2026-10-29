@@ -1,0 +1,25 @@
+[package]
+name = "om-app"
+description = "NawsMapper desktop application (editor + projector output)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "nawsmapper"
+path = "src/main.rs"
+
+[dependencies]
+om-core.workspace = true
+om-render.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+rfd.workspace = true
+pollster.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
