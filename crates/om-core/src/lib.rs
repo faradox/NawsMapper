@@ -15,7 +15,7 @@ pub mod project;
 pub mod shape;
 
 pub use anim::{Animation, Lfo, SurfaceFrame, Wave};
-pub use border::{Border, BorderStyle};
+pub use border::{Border, BorderEffect, BorderPosition, BorderStyle};
 pub use geom::Homography;
 pub use history::History;
 pub use project::*;

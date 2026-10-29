@@ -93,13 +93,23 @@ Tip: use the **Test Grid** source while aligning. Its lines make distortion obvi
   step through them while watching the projection. Try a shader on top of a video
   with *Overlay* or *Color*, or a black-and-white shader with *Multiply* as a mask.
 
-- **Border** (Properties → Border) draws a line along the inside of the shape's edge:
-  pick a color, a width in pixels and a style (*Solid*, *Dashed*, *Dotted*, *Double*,
-  *Dash-dot*). Dashed and dotted borders have **Dash** and **Gap** lengths and a **Flow**
-  speed that sends the dashes around the shape ("marching ants"; negative goes the other
-  way). Dashes are spaced so they close neatly around the shape. Set **Source** to
-  *None* for an outline without a fill. Combined with **Stagger**, flowing borders on
-  several shapes make a chase.
+- **Border** (Properties → Border) draws a line along the shape's edge. The quickest
+  start is a preset: **Neon**, **Rainbow**, **Marching ants**, **Stars**, **Comets**,
+  **Helix**, **Fireworks**. Then tune it:
+  - **Effect**: *Color* (one color), *Gradient* (a palette running along the edge),
+    *Stars*, *Comets*, *Helix* (two twirling strands) or *Fireworks*. Every effect but
+    *Color* uses a **Palette**, the same ones as the shaders.
+  - **Width** in pixels and **Position**: *Inside* keeps the border on the object,
+    *Center* straddles the edge, *Outside* surrounds it.
+  - **Glow** turns it into neon light, glowing on both sides of the line.
+  - *Color* and *Gradient* have a **Style** (*Solid*, *Dashed*, *Dotted*, *Double*,
+    *Dash-dot*) with **Dash** and **Gap** lengths.
+  - **Gradient length** / **Spacing** / **Twist length** sets how often the pattern
+    repeats; it's adjusted slightly so the pattern closes neatly around the shape.
+  - **Flow** sends everything around the shape (negative goes the other way).
+
+  Set **Source** to *None* for a border without a fill. Combined with **Stagger**,
+  flowing borders on several shapes make a chase.
 
 ## 5. Animate
 

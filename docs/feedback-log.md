@@ -20,6 +20,22 @@ Decisions:
 - → docs/trackers/NNNN-....md
 ```
 
+## 2026-10-29: v0.5, borders and sidebar
+
+- Wants animated borders: "neon-light style gradient borders", "stars flowing around
+  the shape border", "twirly helix firework border".
+- Bug: a long name in a Properties drop-down (an image with a long file name as Source)
+  makes the right sidebar huge; dragging it smaller snaps back.
+- Workflow question (raised by the maintainer, not decided yet): she is used to placing a
+  video first and then drawing shapes over it that become its mask, instead of adding a
+  shape and fitting a video into it.
+
+Decisions:
+- Border effects with palettes, glow, inside/center/outside position and presets.
+- Properties content no longer sizes the panel; combos truncate, sliders and rows adapt.
+  → [trackers/0007-animated-borders.md](trackers/0007-animated-borders.md)
+- "Video first, shapes as masks": discussed with the maintainer before building anything.
+
 ## 2026-10-29: v0.4, feature requests
 
 - Borders on shapes, with control over color, thickness and dashed/dotted/solid/etc.

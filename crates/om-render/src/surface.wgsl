@@ -26,8 +26,11 @@ struct SurfaceUniforms {
     points: array<vec4<f32>, 64>, // outline in surface uv, two points per vec4
     border: vec4<f32>,     // border color (straight alpha)
     border_p: vec4<f32>,   // width px (0 = none), style, dash px, gap px
-    border_q: vec4<f32>,   // flow offset px, outline length px
+    border_q: vec4<f32>,   // flow offset px, outline length px, draw margin px, ±effect length px
     arc: array<vec4<f32>, 32>, // distance along the outline at each point, px
+    border_r: vec4<f32>,   // effect, glow 0..1, band from, band to (px inward from the edge)
+    border_s: vec4<f32>,   // palette stop count, cyclic, glow radius px, reach beyond the band px
+    border_stops: array<vec4<f32>, 6>,
 };
 
 @group(0) @binding(0) var<uniform> u: SurfaceUniforms;
@@ -51,6 +54,19 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
         case 1u: { p = u.corners0.zw; }
         case 2u: { p = u.corners1.xy; }
         default: { p = u.corners1.zw; }
+    }
+    // A border that paints outside the shape needs a bigger quad: the
+    // corners' bounding box grown by the margin (`draw_corners` in lib.rs).
+    let margin = u.border_q.z;
+    if margin > 0.0 {
+        let lo = min(min(u.corners0.xy, u.corners0.zw), min(u.corners1.xy, u.corners1.zw)) - margin;
+        let hi = max(max(u.corners0.xy, u.corners0.zw), max(u.corners1.xy, u.corners1.zw)) + margin;
+        switch i {
+            case 0u: { p = lo; }
+            case 1u: { p = vec2<f32>(hi.x, lo.y); }
+            case 2u: { p = hi; }
+            default: { p = vec2<f32>(lo.x, hi.y); }
+        }
     }
     var out: VsOut;
     out.pos = vec4<f32>(p.x / u.canvas.x * 2.0 - 1.0, 1.0 - p.y / u.canvas.y * 2.0, 0.0, 1.0);
@@ -1144,11 +1160,9 @@ fn polygon_distance(p: vec2<f32>) -> f32 {
 }
 
 // ---- Borders --------------------------------------------------------------
-
-// Coverage of the pixel [x - 0.5, x + 0.5] by the interval [lo, hi].
-fn box_coverage(x: f32, lo: f32, hi: f32) -> f32 {
-    return clamp(min(x + 0.5, hi) - max(x - 0.5, lo), 0.0, 1.0);
-}
+//
+// Coordinates: `s` runs along the outline (px), `y` across the border's band
+// from its center (px, positive toward the inside of the shape).
 
 fn arc_length(i: u32) -> f32 {
     return u.arc[i / 4u][i % 4u];
@@ -1175,48 +1189,224 @@ fn outline_position(p: vec2<f32>) -> f32 {
     return s;
 }
 
-// Dashes of length `len` centered at `c + k * period` along the outline.
-fn dash_coverage(s: f32, len: f32, period: f32, c: f32) -> f32 {
-    let m = s - c - period * round((s - c) / period);
-    return clamp(len * 0.5 - abs(m) + 0.5, 0.0, 1.0);
+// Offset of `s` from the nearest multiple of `period`.
+fn wrap_near(s: f32, period: f32) -> f32 {
+    return s - period * round(s / period);
 }
 
-// Round dots of diameter `w` centered on the border line.
-fn dot_coverage(s: f32, x: f32, w: f32, period: f32, c: f32) -> f32 {
-    let m = s - c - period * round((s - c) / period);
-    return clamp(w * 0.5 - length(vec2<f32>(m, x - w * 0.5)) + 0.5, 0.0, 1.0);
+// A repeat length close to `len` that fits a whole number of times around
+// the outline, so patterns close without a seam.
+fn fitted_length(len: f32) -> f32 {
+    let per = u.border_q.y;
+    return per / max(round(per / max(len, 1.0)), 1.0);
 }
 
-// How much of this pixel the border covers. `inside_px` is the distance
-// from the shape's edge in pixels; the border runs along the inside.
-fn border_coverage(suv: vec2<f32>, inside_px: f32) -> f32 {
-    let w = u.border_p.x;
-    // Same edge position as the fill's antialiasing ramp.
-    let x = inside_px - 0.5;
-    let style = u32(u.border_p.y);
-    if style == 3u {
-        let third = w / 3.0;
-        return max(box_coverage(x, 0.0, third), box_coverage(x, w - third, w));
+// Random 0..1 for repeat `k` of `n` around the outline (repeat n is repeat 0).
+fn repeat_hash(k: f32, n: f32, salt: f32) -> f32 {
+    return hash2(vec2<f32>(k - n * floor(k / n), salt));
+}
+
+// Color at position `x` of the border's palette (like `palette`).
+fn border_palette(x: f32) -> vec4<f32> {
+    let n = clamp(u32(u.border_s.x), 1u, 6u);
+    let cyclic = u.border_s.y > 0.5;
+    var pos: f32;
+    if cyclic {
+        pos = fract(x) * f32(n);
+    } else {
+        pos = (1.0 - abs(1.0 - 2.0 * fract(x * 0.5))) * f32(n - 1u);
     }
-    let band = box_coverage(x, 0.0, w);
-    if style == 0u || band <= 0.0 {
-        return band;
-    }
-    let s = outline_position(suv) - u.border_q.x;
+    let i = min(u32(pos), n - 1u);
+    let j = select(min(i + 1u, n - 1u), (i + 1u) % n, cyclic);
+    return mix(u.border_stops[i], u.border_stops[j], pos - f32(i));
+}
+
+// Palette running along the outline, one full cycle per `len`.
+fn palette_along(s: f32, len: f32) -> vec4<f32> {
+    // A mirrored palette needs two lengths to come back to its first color.
+    return border_palette(s / fitted_length(len) * select(2.0, 1.0, u.border_s.y > 0.5));
+}
+
+// Signed distance to an axis-aligned box of half size (hx, hy).
+fn box_distance(x: f32, y: f32, hx: f32, hy: f32) -> f32 {
+    let q = vec2<f32>(abs(x) - hx, abs(y) - hy);
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+// Signed distance (px, < 0 inside) to the painted part of a line style.
+fn style_distance(s: f32, y: f32, half: f32) -> f32 {
+    let w = half * 2.0;
     let dash = u.border_p.z;
     let gap = u.border_p.w;
-    switch style {
+    switch u32(u.border_p.y) {
         case 1u: {
-            return band * dash_coverage(s, dash, dash + gap, dash * 0.5);
+            return box_distance(wrap_near(s - dash * 0.5, dash + gap), y, dash * 0.5, half);
         }
         case 2u: {
-            return dot_coverage(s, x, w, w + gap, w * 0.5);
+            return length(vec2<f32>(wrap_near(s - half, w + gap), y)) - half;
+        }
+        case 3u: {
+            let third = w / 3.0;
+            return abs(abs(y) - (half - third * 0.5)) - third * 0.5;
+        }
+        case 4u: {
+            let period = dash + w + 2.0 * gap;
+            let d = box_distance(wrap_near(s - dash * 0.5, period), y, dash * 0.5, half);
+            return min(d, length(vec2<f32>(wrap_near(s - dash - gap - half, period), y)) - half);
         }
         default: {
-            let period = dash + w + 2.0 * gap;
-            return max(band * dash_coverage(s, dash, period, dash * 0.5), dot_coverage(s, x, w, period, dash + gap + w * 0.5));
+            return abs(y) - half;
         }
     }
+}
+
+// Neon glow outside a shape at signed distance `d`.
+fn glow_at(d: f32) -> f32 {
+    let radius = u.border_s.z;
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    return u.border_r.y * 0.8 * exp(-4.0 * max(d, 0.0) / radius);
+}
+
+// Straight-alpha `top` over `bottom`.
+fn over(top: vec4<f32>, bottom: vec4<f32>) -> vec4<f32> {
+    let a = top.a + bottom.a * (1.0 - top.a);
+    return vec4<f32>((top.rgb * top.a + bottom.rgb * bottom.a * (1.0 - top.a)) / max(a, 1e-5), a);
+}
+
+// Light that adds up (particles) to straight alpha.
+fn light_to_color(acc: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(acc.rgb / max(acc.a, 1e-4), min(acc.a, 1.0));
+}
+
+// The border at this pixel, straight alpha. `inside_px` is the distance from
+// the shape's edge in pixels (negative outside the shape).
+fn border_paint(suv: vec2<f32>, inside_px: f32) -> vec4<f32> {
+    let band_from = u.border_r.z;
+    let band_to = u.border_r.w;
+    let half = (band_to - band_from) * 0.5;
+    // The 0.5 px matches the fill's antialiased edge.
+    let y = inside_px - 0.5 - (band_from + band_to) * 0.5;
+    if abs(y) > half + u.border_s.w + 1.0 {
+        return vec4<f32>(0.0);
+    }
+    var s = 0.0;
+    if u.border_q.y > 0.0 {
+        s = outline_position(suv) - u.border_q.x;
+    }
+    let per = u.border_q.y;
+    let len = abs(u.border_q.w);
+    let dir = sign(u.border_q.w);
+    let glow = u.border_r.y;
+    let t = u.canvas.z;
+    let w = u.border_p.x;
+    let effect = u32(u.border_r.x);
+
+    // Color and gradient: a line in the border's style, with a white-hot
+    // core when it glows.
+    if effect <= 1u {
+        let d = style_distance(s, y, half);
+        var col = u.border;
+        if effect == 1u {
+            col = palette_along(s, len);
+        }
+        let core = mix(col.rgb, vec3<f32>(1.0), glow * 0.6 * clamp(1.0 - abs(y) / max(half, 0.5), 0.0, 1.0));
+        return over(vec4<f32>(core, col.a * clamp(0.5 - d, 0.0, 1.0)), vec4<f32>(col.rgb, col.a * glow_at(d)));
+    }
+
+    // Helix: two strands twisting around the band's center line.
+    if effect == 4u {
+        let twist = fitted_length(len);
+        let amp = half * 0.8;
+        let th = max(half * 0.22, 0.75);
+        var front = vec4<f32>(0.0);
+        var back = vec4<f32>(0.0);
+        for (var i = 0; i < 2; i++) {
+            let ph = s / twist * TAU - t * 2.0 + f32(i) * 3.14159265;
+            let z = cos(ph);
+            let slope = z * amp * TAU / twist;
+            let d = abs(y - sin(ph) * amp) / sqrt(1.0 + slope * slope) - th * (0.8 + 0.3 * z);
+            let col = border_palette(f32(i) * 0.5 + 0.2 * sin(ph));
+            let shade = 0.55 + 0.45 * z;
+            let strand = over(vec4<f32>(col.rgb * shade, col.a * clamp(0.5 - d, 0.0, 1.0)), vec4<f32>(col.rgb, col.a * glow_at(d)));
+            if z > 0.0 {
+                front = strand;
+            } else {
+                back = strand;
+            }
+        }
+        return over(front, back);
+    }
+
+    // Particles (stars, comets, fireworks): one per repeat, jittered. Check
+    // the neighbors too, since particles reach into the next repeat. They
+    // take their colors from the bright end of the palette (many palettes
+    // start near black).
+    let spacing = fitted_length(len);
+    let n = round(per / spacing);
+    let k0 = round(s / spacing);
+    var acc = vec4<f32>(0.0);
+    // With glow, a soft rail of light under the particles.
+    let rail = glow * 0.35 * exp(-abs(y) / max(half * 0.5, 1.0));
+    let rail_col = palette_along(s, len * 4.0);
+    acc += vec4<f32>(rail_col.rgb * rail, rail) * rail_col.a;
+    for (var j = -1; j <= 1; j++) {
+        let k = k0 + f32(j);
+        let h = repeat_hash(k, n, 1.3);
+        let h2 = repeat_hash(k, n, 7.7);
+        switch effect {
+            // Stars: twinkling four-pointed sparkles with a faint trail.
+            case 2u: {
+                let c = (k + (h - 0.5) * 0.6) * spacing;
+                let o = vec2<f32>(s - c, y - (h2 - 0.5) * half * 0.8);
+                let tw = 0.55 + 0.45 * sin(t * (2.0 + 3.0 * h) + h * TAU);
+                let size = max(half * (0.9 + 0.9 * h2) * tw, 1.5);
+                let q = rot2(t * (h - 0.5) * 2.0) * o;
+                let core = exp(-length(o) / (size * (0.25 + 0.2 * glow)));
+                let ray_w = max(size * 0.08, 0.6);
+                let rays = exp(-abs(q.x) / ray_w) * exp(-abs(q.y) / size) + exp(-abs(q.y) / ray_w) * exp(-abs(q.x) / size);
+                let behind = -o.x * dir;
+                let trail = select(0.0, exp(-behind / (spacing * 0.3)) * exp(-abs(o.y) / (size * 0.12)) * 0.4, behind > 0.0);
+                let v = (core + rays * 0.8 + trail) * 1.5;
+                let col = border_palette(0.4 + 0.6 * h);
+                acc += vec4<f32>(mix(col.rgb, vec3<f32>(1.0), core * 0.5) * v, v) * col.a;
+            }
+            // Comets: a hot head and a tail that narrows and changes color.
+            case 3u: {
+                let c = (k + (h - 0.5) * 0.4) * spacing;
+                let ahead = (s - c) * dir;
+                let dy = y - (h2 - 0.5) * half * 0.6;
+                let head = exp(-length(vec2<f32>(ahead, dy)) / max(half * 0.9, 1.0));
+                let f = clamp(-ahead / (spacing * (0.35 + 0.4 * h)), 0.0, 1.0);
+                let tail_w = max(half * (1.0 - f), 0.6);
+                let tail = select(0.0, (1.0 - f) * (1.0 - f) * exp(-abs(dy) / tail_w * 1.5), ahead < 0.0);
+                let col = border_palette(1.0 - f * 0.5 - h * 0.15);
+                let v = head * 2.0 + tail * 1.3;
+                acc += vec4<f32>(mix(col.rgb, vec3<f32>(1.0), min(head, 1.0) * 0.7) * v, v) * col.a;
+            }
+            // Fireworks: bursts of sparks with streaks, each on its own clock.
+            default: {
+                let c = (k + (h - 0.5) * 0.5) * spacing;
+                let o = vec2<f32>(s - c, y - (h2 - 0.5) * half);
+                let age = fract(t / (1.4 + h2 * 1.2) + h * 7.0);
+                let rad = (half + w * 4.0) * (1.0 - (1.0 - age) * (1.0 - age));
+                let fade = (1.0 - age) * (1.0 - age);
+                let count = 9.0 + floor(h2 * 6.0);
+                let idx = round(atan2(o.y, o.x) / TAU * count - h);
+                let pa = (idx + h) / count * TAU;
+                let ray = vec2<f32>(cos(pa), sin(pa));
+                let spark = exp(-length(o - ray * rad) / max(w * 0.25 * (1.5 - age), 0.8));
+                let along = clamp(dot(o, ray), rad * 0.5, rad);
+                let streak = exp(-length(o - ray * along) / max(w * 0.08, 0.7)) * 0.6;
+                let flash = exp(-length(o) / max(half, 1.0)) * (1.0 - smoothstep(0.0, 0.15, age)) * 1.5;
+                let v = ((spark + streak) * fade + flash) * 1.5;
+                let col = border_palette(0.4 + 0.6 * fract(h + age * 0.5));
+                acc += vec4<f32>(mix(col.rgb, vec3<f32>(1.0), min(flash, 1.0) * 0.5) * v, v) * col.a;
+            }
+        }
+    }
+    return light_to_color(acc);
 }
 
 @fragment
@@ -1224,6 +1414,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let inv_h = mat3x3<f32>(u.inv_h0.xyz, u.inv_h1.xyz, u.inv_h2.xyz);
     let hp = inv_h * vec3<f32>(in.canvas_px, 1.0);
     let suv = hp.xy / hp.z;
+    // Beyond the quad's horizon (only reachable in a grown draw area) the
+    // mapping folds back; nothing is drawn there.
+    let in_front = hp.z > 0.0;
 
     let mapping = u.canvas.w;
     var base_uv = suv;
@@ -1236,7 +1429,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Coverage: always at least ~1px of antialiasing, more with feather.
     let d = mask_distance(suv, u32(u.misc.w));
     let aa = max(fwidth(d), 1e-5);
-    let coverage = smoothstep(0.0, max(u.misc.z, aa), d);
+    let coverage = smoothstep(0.0, max(u.misc.z, aa), d) * select(0.0, 1.0, in_front);
     // Pixels from the edge: `d` is in surface uv, its gradient converts it
     // (this also keeps borders even under perspective).
     let inside_px = d / max(length(vec2<f32>(dpdx(d), dpdy(d))), 1e-7);
@@ -1255,11 +1448,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var rgb = clamp(hue_rotate(color.rgb, u.misc.y), vec3<f32>(0.0), vec3<f32>(1.0)) * u.tint.rgb;
     var alpha = color.a * u.tint.a * u.misc.x * coverage;
     // The border goes over the fill (straight alpha "over"), before blending.
-    if u.border_p.x > 0.0 {
-        let ba = u.border.a * u.misc.x * border_coverage(suv, inside_px);
-        let a = ba + alpha * (1.0 - ba);
-        rgb = (u.border.rgb * ba + rgb * alpha * (1.0 - ba)) / max(a, 1e-5);
-        alpha = a;
+    if u.border_p.x > 0.0 && in_front {
+        let b = border_paint(suv, inside_px);
+        let c = over(vec4<f32>(b.rgb, b.a * u.misc.x), vec4<f32>(rgb, alpha));
+        rgb = c.rgb;
+        alpha = c.a;
     }
     // Backdrop blend modes (W3C compositing): blend with what's below, then
     // composite normally. Fixed-function modes have mode 0.

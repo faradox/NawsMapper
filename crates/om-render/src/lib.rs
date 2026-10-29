@@ -21,7 +21,7 @@ use std::num::NonZeroU64;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat3, Vec2};
 use om_core::anim::evaluate;
-use om_core::border::border_path;
+use om_core::border::{BorderEffect, border_path};
 use om_core::geom::quad_aspect;
 use om_core::shape::{MAX_OUTLINE_POINTS, outline_uv};
 use om_core::{BlendMode, Generator, Mapping, Mask, Palette, Project, SourceId, SourceKind, Surface};
@@ -57,6 +57,9 @@ struct SurfaceUniforms {
     border_p: [f32; 4],
     border_q: [f32; 4],
     arc: [[f32; 4]; MAX_OUTLINE_POINTS / 4],
+    border_r: [f32; 4],
+    border_s: [f32; 4],
+    border_stops: [[f32; 4]; MAX_STOPS],
 }
 
 const MAX_STOPS: usize = 6;
@@ -300,7 +303,7 @@ impl Renderer {
                 Some(p) => p,
                 None => {
                     // Off-canvas surfaces draw nothing.
-                    let Some((origin, extent)) = pixel_bounds(s.corners, size) else { continue };
+                    let Some((origin, extent)) = pixel_bounds(draw_corners(s), size) else { continue };
                     // A copy can't happen inside a pass: end it, copy, continue.
                     drop(pass.take());
                     encoder.copy_texture_to_texture(
@@ -372,6 +375,19 @@ fn begin_pass(
 /// Cutouts always paint normally.
 fn effective_blend(s: &Surface) -> BlendMode {
     if s.cutout { BlendMode::Normal } else { s.blend }
+}
+
+/// The quad a surface is drawn with: its corners, or, when its border
+/// paints outside the shape, their bounding box grown by that much. Must
+/// match `vs_main` in surface.wgsl.
+fn draw_corners(s: &Surface) -> [Vec2; 4] {
+    let margin = s.border.outer_extent();
+    if margin <= 0.0 {
+        return s.corners;
+    }
+    let min = s.corners.iter().fold(Vec2::INFINITY, |a, c| a.min(*c)) - margin;
+    let max = s.corners.iter().fold(Vec2::NEG_INFINITY, |a, c| a.max(*c)) + margin;
+    [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)]
 }
 
 /// Pixel rectangle covered by a surface's corners, clipped to the target.
@@ -479,15 +495,17 @@ fn surface_uniforms(project: &Project, s: &Surface, canvas: Vec2, time: f32) -> 
         Mask::Triangle => 2.0,
         _ => 3.0,
     };
-    // Broken borders need the outline with distances along it (for any
-    // shape); polygon shapes need it for their coverage. The subdivided
-    // border outline is the same polygon, so one list serves both.
+    // Broken borders and border effects need the outline with distances
+    // along it (for any shape); polygon shapes need it for their coverage.
+    // The subdivided border outline is the same polygon, so one list serves both.
     let border = &s.border;
-    let border_on = border.enabled && border.width > 0.0 && border.color[3] > 0.0;
+    let border_on = border.enabled
+        && border.width > 0.0
+        && (border.effect != BorderEffect::Color || border.color[3] > 0.0);
     let period = border.period();
     let mut arc = [[0.0; 4]; MAX_OUTLINE_POINTS / 4];
     let mut perimeter = 0.0;
-    let outline = if border_on && border.style.is_broken() {
+    let outline = if border_on && border.needs_path() {
         let bp = border_path(s.mask, &s.path, c, period);
         for (i, d) in bp.distances.iter().take(MAX_OUTLINE_POINTS).enumerate() {
             arc[i / 4][i % 4] = *d;
@@ -506,7 +524,16 @@ fn surface_uniforms(project: &Project, s: &Surface, canvas: Vec2, time: f32) -> 
         points[i / 2][(i % 2) * 2 + 1] = p.y;
     }
     // Flow is a pure function of (local) time, wrapped to keep precision.
-    let flow = if period > 0.0 { (border.flow * frame.local_time).rem_euclid(period) } else { 0.0 };
+    // Every pattern repeats a whole number of times around the outline.
+    let flow = if perimeter > 0.0 { (border.flow * frame.local_time).rem_euclid(perimeter) } else { 0.0 };
+    let (band_from, band_to) = border.band();
+    let border_stop_list = border.palette.stops(border.color, border.color_b);
+    let mut border_stops = [[0.0; 4]; MAX_STOPS];
+    for (dst, src) in border_stops.iter_mut().zip(&border_stop_list) {
+        *dst = *src;
+    }
+    // The sign of the length tells the shader which way things travel (for tails).
+    let direction = if border.flow < 0.0 { -1.0 } else { 1.0 };
     let mapping = match s.mapping {
         Mapping::Surface => 0.0,
         Mapping::Canvas => 1.0,
@@ -543,8 +570,21 @@ fn surface_uniforms(project: &Project, s: &Surface, canvas: Vec2, time: f32) -> 
             border.dash.max(0.5),
             border.gap.max(0.0),
         ],
-        border_q: [flow, perimeter, 0.0, 0.0],
+        border_q: [
+            flow,
+            perimeter,
+            if border_on { border.outer_extent() } else { 0.0 },
+            border.length.max(4.0) * direction,
+        ],
         arc,
+        border_r: [border.effect.shader_index() as f32, border.glow.clamp(0.0, 1.0), band_from, band_to],
+        border_s: [
+            border_stop_list.len().min(MAX_STOPS) as f32,
+            if border.palette.is_cyclic() { 1.0 } else { 0.0 },
+            border.glow_radius(),
+            border.reach(),
+        ],
+        border_stops,
     }
 }
 
@@ -720,6 +760,31 @@ mod tests {
         assert!((periods - periods.round()).abs() < 1e-4, "whole number of dashes");
         // Local time 1 s (minus the demo's time offset of 0) → 10 px of flow.
         assert_eq!(u.border_q[0], 10.0);
+        assert_eq!(u.border_q[2], 0.0, "inside, no glow: drawn within the corners");
+
+        let b = &mut p.surfaces[0].border;
+        b.effect = om_core::BorderEffect::Stars;
+        b.position = om_core::border::BorderPosition::Center;
+        b.flow = -5.0;
+        let u = super::surface_uniforms(&p, &p.surfaces[0], p.canvas.size(), 0.0);
+        assert_eq!(u.border_r[0], 2.0);
+        assert_eq!((u.border_r[2], u.border_r[3]), (-4.0, 4.0));
+        assert!(u.border_q[2] > 4.0, "the draw area grows for the outer half and the stars");
+        assert!(u.border_q[3] < 0.0, "travelling backwards");
+        assert_eq!(u.border_s[0], 6.0, "rainbow palette");
+    }
+
+    #[test]
+    fn draw_area_grows_with_the_border() {
+        let mut p = om_core::Project::demo();
+        let s = &mut p.surfaces[0];
+        assert_eq!(super::draw_corners(s), s.corners);
+        s.border.enabled = true;
+        s.border.position = om_core::border::BorderPosition::Outside;
+        let m = s.border.outer_extent();
+        let d = super::draw_corners(s);
+        let min = s.corners.iter().fold(glam::Vec2::INFINITY, |a, c| a.min(*c));
+        assert_eq!(d[0], min - m);
     }
 
     #[test]
@@ -773,7 +838,7 @@ mod tests {
 
     #[test]
     fn uniforms_match_shader_layout() {
-        // 121 vec4s, see `SurfaceUniforms` in surface.wgsl.
-        assert_eq!(size_of::<super::SurfaceUniforms>(), 121 * 16);
+        // 129 vec4s, see `SurfaceUniforms` in surface.wgsl.
+        assert_eq!(size_of::<super::SurfaceUniforms>(), 129 * 16);
     }
 }

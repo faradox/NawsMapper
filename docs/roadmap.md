@@ -39,6 +39,12 @@ Borders on any shape (5 styles, flowing dashes), *Show Mouse on Projector* for t
 14 new shaders (60 presets). Tracker:
 [trackers/0006-borders-cursor-shaders.md](trackers/0006-borders-cursor-shaders.md).
 
+## ✅ v0.6: Animated borders, resizable Properties panel (done)
+
+Border effects (gradient, stars, comets, helix, fireworks), glow, inside/center/outside,
+presets; long names no longer pin the Properties panel open. Tracker:
+[trackers/0007-animated-borders.md](trackers/0007-animated-borders.md).
+
 ## Next candidates (pick from feedback)
 
 ### Output & show workflow

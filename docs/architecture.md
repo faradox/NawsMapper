@@ -78,15 +78,23 @@ on sRGB-encoded values, like Photoshop's default.
 
 **Borders** are part of the same draw call. The shape's coverage distance `d` (unit-square
 units) divided by the length of its screen-space gradient gives the distance from the edge
-in pixels, which is accurate to first order even under perspective; the border is the band
-`0..width` of that distance, composited over the fill before blending. Dashed, dotted and
-dash-dot borders also need the position *along* the outline: `om_core::border::border_path`
+in pixels, which is accurate to first order even under perspective. The border works in
+two coordinates: `y`, across its band (inside, centered on or outside the edge), and `s`,
+along the outline. Line styles are signed distances in (s, y), so glow can follow dashes;
+the particle effects (stars, comets, fireworks) place one jittered particle per repeat
+along `s` and check the neighboring repeats. The result is composited over the fill before
+blending. When a border paints outside the shape (Center/Outside, glow, sparks), the
+surface is drawn with its corners' bounding box grown by `Border::outer_extent`
+(`draw_corners`, mirrored in `vs_main`); the fragment shader maps any pixel back through the
+inverse homography anyway, and skips pixels past the quad's horizon (`hp.z <= 0`).
+Effects and broken styles need the position *along* the outline: `om_core::border::border_path`
 sends the outline (any shape, long edges split into pieces of equal canvas length) with the
 pixel distance at each point, stretched so a whole number of dash periods fits around the
-shape. The shader finds the nearest outline segment and interpolates. Flow is an offset of
-`flow × local time`, so it follows speed and time offset like everything else.
+shape (effect repeat lengths are fitted to whole numbers in the shader). The shader finds
+the nearest outline segment and interpolates. Flow is an offset of `flow × local time`, so
+it follows speed and time offset like everything else.
 
-Uniforms for all surfaces go into one buffer with dynamic offsets (1936 bytes per
+Uniforms for all surfaces go into one buffer with dynamic offsets (2064 bytes per
 surface, padded to the device's offset alignment).
 
 **Shader Library thumbnails** use the same pipeline: `Renderer::render_thumbnails`

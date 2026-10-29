@@ -7,7 +7,7 @@ use om_core::{Generator, Palette, Pattern, SourceId, SourceKind};
 use super::panel_header;
 use crate::app::{Action, NawsMapperApp};
 use crate::theme;
-use crate::widgets::{color_edit, grid, prop_label, to_color32};
+use crate::widgets::{color_edit, combo, fit_slider, grid, prop_label, to_color32};
 
 pub fn sources_panel(ui: &mut Ui, app: &mut NawsMapperApp) {
     panel_header(ui, "Sources");
@@ -159,19 +159,16 @@ pub fn sources_panel(ui: &mut Ui, app: &mut NawsMapperApp) {
 
 fn generator_ui(ui: &mut Ui, g: &mut Generator) {
     prop_label(ui, "Pattern", "");
-    egui::ComboBox::from_id_salt("pattern").selected_text(g.pattern.label()).height(400.0).show_ui(
-        ui,
-        |ui| {
-            for p in Pattern::ALL {
-                ui.selectable_value(&mut g.pattern, p, p.label());
-            }
-        },
-    );
+    combo(ui, "pattern", g.pattern.label()).height(400.0).show_ui(ui, |ui| {
+        for p in Pattern::ALL {
+            ui.selectable_value(&mut g.pattern, p, p.label());
+        }
+    });
     ui.end_row();
 
     if g.pattern != Pattern::TestGrid {
         prop_label(ui, "Palette", "The colors the pattern is painted with");
-        egui::ComboBox::from_id_salt("palette").selected_text(g.palette.label()).show_ui(ui, |ui| {
+        combo(ui, "palette", g.palette.label()).show_ui(ui, |ui| {
             for p in Palette::ALL {
                 ui.horizontal(|ui| {
                     palette_strip(ui, p.stops(g.color_a, g.color_b), egui::vec2(36.0, 12.0));
@@ -198,26 +195,26 @@ fn generator_ui(ui: &mut Ui, g: &mut Generator) {
     ui.end_row();
 
     prop_label(ui, "Scale", "How many repetitions across the surface");
-    ui.add(egui::Slider::new(&mut g.scale, 0.25..=64.0).logarithmic(true));
+    fit_slider(ui, egui::Slider::new(&mut g.scale, 0.25..=64.0).logarithmic(true));
     ui.end_row();
 
     prop_label(ui, "Speed", "The pattern's own motion (0 = still)");
-    ui.add(egui::Slider::new(&mut g.speed, -4.0..=4.0));
+    fit_slider(ui, egui::Slider::new(&mut g.speed, -4.0..=4.0));
     ui.end_row();
 
     if let Some(label) = g.pattern.detail_label() {
         prop_label(ui, label, "");
-        ui.add(egui::Slider::new(&mut g.detail, 0.0..=1.0));
+        fit_slider(ui, egui::Slider::new(&mut g.detail, 0.0..=1.0));
         ui.end_row();
     }
 
     prop_label(ui, "Angle", "");
-    ui.add(egui::Slider::new(&mut g.angle, -180.0..=180.0).suffix("°"));
+    fit_slider(ui, egui::Slider::new(&mut g.angle, -180.0..=180.0).suffix("°"));
     ui.end_row();
 }
 
 /// A horizontal gradient preview of palette stops.
-fn palette_strip(ui: &mut Ui, stops: Vec<om_core::Color>, size: egui::Vec2) {
+pub(super) fn palette_strip(ui: &mut Ui, stops: Vec<om_core::Color>, size: egui::Vec2) {
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     paint_stops(ui.painter(), rect, &stops);
 }

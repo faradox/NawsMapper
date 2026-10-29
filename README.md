@@ -50,8 +50,10 @@ development platform; Windows builds come for free.
 - **Animate**: scroll, spin, hue cycle, zoom pulse and opacity pulse/strobe (LFOs with
   sine/triangle/saw/square), per-surface speed and time offset, presets, **Stagger**.
 - **Borders** on any shape: color, width, solid / dashed / dotted / double / dash-dot,
-  with dashes that can flow around the shape. Drawn inside the edge; with no source,
-  a surface is an outline only.
+  inside / centered / outside the edge, with **neon glow** and **animated effects**:
+  flowing gradients, twinkling stars, comets, a twirling helix and fireworks, all with
+  the shader palettes. One-click presets (Neon, Rainbow, Marching ants…). With no
+  source, a surface is an outline only.
 - Opacity, tint, feathered edges and all 24 **Photoshop blend modes** (Multiply, Screen,
   Overlay, Soft Light, Color Dodge, Difference, Hue, Color, Luminosity…), applied
   against everything below the surface. `Shift +` / `Shift -` cycles them.
