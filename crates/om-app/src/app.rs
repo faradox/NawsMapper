@@ -840,7 +840,13 @@ impl eframe::App for NawsMapperApp {
         }
         panels::library_window(&ctx, self);
 
-        self.output.show(&ctx, self.output_tex, &self.doc.project, &self.editor.selection);
+        self.output.show(
+            &ctx,
+            self.output_tex,
+            &self.doc.project,
+            &self.editor.selection,
+            self.editor.pointer,
+        );
 
         self.run_actions(&ctx, frame);
         self.show_prompt(&ctx, frame);

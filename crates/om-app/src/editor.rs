@@ -126,6 +126,8 @@ pub struct Editor {
     /// A finished pen path; the app turns it into a surface.
     pub finished_pen: Option<Vec<PathPoint>>,
     pub points: Option<PointEdit>,
+    /// Where the pointer is on the canvas (canvas px), while it is over the canvas view.
+    pub pointer: Option<Vec2>,
     last_rect: Rect,
 }
 
@@ -146,6 +148,7 @@ impl Default for Editor {
             pen: None,
             finished_pen: None,
             points: None,
+            pointer: None,
             last_rect: Rect::NOTHING,
         }
     }
@@ -312,6 +315,7 @@ impl Editor {
 
         let xf = self.view(rect, project);
         let canvas_rect = Rect::from_min_max(xf.to_screen(Vec2::ZERO), xf.to_screen(size));
+        self.pointer = hover.filter(|p| rect.contains(*p)).map(|p| xf.to_canvas(p));
 
         // ---- Pointer interaction ----------------------------------------
         let press_origin = ui.input(|i| i.pointer.press_origin());

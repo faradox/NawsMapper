@@ -21,6 +21,7 @@ use std::num::NonZeroU64;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat3, Vec2};
 use om_core::anim::evaluate;
+use om_core::border::border_path;
 use om_core::geom::quad_aspect;
 use om_core::shape::{MAX_OUTLINE_POINTS, outline_uv};
 use om_core::{BlendMode, Generator, Mapping, Mask, Palette, Project, SourceId, SourceKind, Surface};
@@ -52,6 +53,10 @@ struct SurfaceUniforms {
     stops: [[f32; 4]; MAX_STOPS],
     shape: [f32; 4],
     points: [[f32; 4]; MAX_OUTLINE_POINTS / 2],
+    border: [f32; 4],
+    border_p: [f32; 4],
+    border_q: [f32; 4],
+    arc: [[f32; 4]; MAX_OUTLINE_POINTS / 4],
 }
 
 const MAX_STOPS: usize = 6;
@@ -474,16 +479,34 @@ fn surface_uniforms(project: &Project, s: &Surface, canvas: Vec2, time: f32) -> 
         Mask::Triangle => 2.0,
         _ => 3.0,
     };
-    let mut points = [[0.0; 4]; MAX_OUTLINE_POINTS / 2];
-    let mut point_count = 0;
-    if s.mask.is_polygon() {
-        let outline = outline_uv(s.mask, &s.path);
-        point_count = outline.len().min(MAX_OUTLINE_POINTS);
-        for (i, p) in outline.iter().take(point_count).enumerate() {
-            points[i / 2][(i % 2) * 2] = p.x;
-            points[i / 2][(i % 2) * 2 + 1] = p.y;
+    // Broken borders need the outline with distances along it (for any
+    // shape); polygon shapes need it for their coverage. The subdivided
+    // border outline is the same polygon, so one list serves both.
+    let border = &s.border;
+    let border_on = border.enabled && border.width > 0.0 && border.color[3] > 0.0;
+    let period = border.period();
+    let mut arc = [[0.0; 4]; MAX_OUTLINE_POINTS / 4];
+    let mut perimeter = 0.0;
+    let outline = if border_on && border.style.is_broken() {
+        let bp = border_path(s.mask, &s.path, c, period);
+        for (i, d) in bp.distances.iter().take(MAX_OUTLINE_POINTS).enumerate() {
+            arc[i / 4][i % 4] = *d;
         }
+        perimeter = bp.perimeter;
+        bp.points
+    } else if s.mask.is_polygon() {
+        outline_uv(s.mask, &s.path)
+    } else {
+        Vec::new()
+    };
+    let mut points = [[0.0; 4]; MAX_OUTLINE_POINTS / 2];
+    let point_count = outline.len().min(MAX_OUTLINE_POINTS);
+    for (i, p) in outline.iter().take(point_count).enumerate() {
+        points[i / 2][(i % 2) * 2] = p.x;
+        points[i / 2][(i % 2) * 2 + 1] = p.y;
     }
+    // Flow is a pure function of (local) time, wrapped to keep precision.
+    let flow = if period > 0.0 { (border.flow * frame.local_time).rem_euclid(period) } else { 0.0 };
     let mapping = match s.mapping {
         Mapping::Surface => 0.0,
         Mapping::Canvas => 1.0,
@@ -513,6 +536,15 @@ fn surface_uniforms(project: &Project, s: &Surface, canvas: Vec2, time: f32) -> 
         stops,
         shape: [point_count as f32, backdrop_index(effective_blend(s)) as f32, 0.0, 0.0],
         points,
+        border: border.color,
+        border_p: [
+            if border_on { border.width } else { 0.0 },
+            border.style.shader_index() as f32,
+            border.dash.max(0.5),
+            border.gap.max(0.0),
+        ],
+        border_q: [flow, perimeter, 0.0, 0.0],
+        arc,
     }
 }
 
@@ -665,6 +697,32 @@ mod tests {
     }
 
     #[test]
+    fn borders_reach_the_shader() {
+        let mut p = om_core::Project::demo();
+        let u = super::surface_uniforms(&p, &p.surfaces[0], p.canvas.size(), 0.0);
+        assert_eq!(u.border_p[0], 0.0, "off by default");
+
+        let b = &mut p.surfaces[0].border;
+        b.enabled = true;
+        b.width = 8.0;
+        let u = super::surface_uniforms(&p, &p.surfaces[0], p.canvas.size(), 0.0);
+        assert_eq!((u.border_p[0], u.border_p[1]), (8.0, 0.0));
+        assert_eq!(u.shape[0], 0.0, "a solid border on a quad needs no outline");
+
+        let b = &mut p.surfaces[0].border;
+        b.style = om_core::BorderStyle::Dashed;
+        b.flow = 10.0;
+        let u = super::surface_uniforms(&p, &p.surfaces[0], p.canvas.size(), 1.0);
+        assert_eq!(u.misc[3], 0.0, "coverage stays analytic");
+        assert!(u.shape[0] > 4.0, "subdivided outline for the dashes");
+        let period = p.surfaces[0].border.period();
+        let periods = u.border_q[1] / period;
+        assert!((periods - periods.round()).abs() < 1e-4, "whole number of dashes");
+        // Local time 1 s (minus the demo's time offset of 0) → 10 px of flow.
+        assert_eq!(u.border_q[0], 10.0);
+    }
+
+    #[test]
     fn generator_palette_reaches_the_shader() {
         let mut p = om_core::Project::demo();
         let id = p.surfaces[0].source.unwrap();
@@ -715,7 +773,7 @@ mod tests {
 
     #[test]
     fn uniforms_match_shader_layout() {
-        // 86 vec4s, see `SurfaceUniforms` in surface.wgsl.
-        assert_eq!(size_of::<super::SurfaceUniforms>(), 86 * 16);
+        // 121 vec4s, see `SurfaceUniforms` in surface.wgsl.
+        assert_eq!(size_of::<super::SurfaceUniforms>(), 121 * 16);
     }
 }

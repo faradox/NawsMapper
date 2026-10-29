@@ -6,6 +6,7 @@
 //! both build on these types.
 
 pub mod anim;
+pub mod border;
 pub mod catalog;
 pub mod diff;
 pub mod geom;
@@ -14,6 +15,7 @@ pub mod project;
 pub mod shape;
 
 pub use anim::{Animation, Lfo, SurfaceFrame, Wave};
+pub use border::{Border, BorderStyle};
 pub use geom::Homography;
 pub use history::History;
 pub use project::*;

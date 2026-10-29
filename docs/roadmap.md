@@ -33,6 +33,12 @@ palettes and a live-preview Shader Library. Tracker:
 14 new shaders (42 presets), 3 new palettes, all 24 Photoshop blend modes with
 `Shift +/-` cycling. Tracker: [trackers/0005-shaders-blend-modes.md](trackers/0005-shaders-blend-modes.md).
 
+## ✅ v0.5: Borders, mouse on projector, more shaders (done)
+
+Borders on any shape (5 styles, flowing dashes), *Show Mouse on Projector* for tracing,
+14 new shaders (60 presets). Tracker:
+[trackers/0006-borders-cursor-shaders.md](trackers/0006-borders-cursor-shaders.md).
+
 ## Next candidates (pick from feedback)
 
 ### Output & show workflow

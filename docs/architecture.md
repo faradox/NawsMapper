@@ -76,7 +76,17 @@ blend function (`blend()` in the WGSL, selected by `backdrop_index`), and compos
 normally. Cost: one small copy and one pass break per such surface. Blending happens
 on sRGB-encoded values, like Photoshop's default.
 
-Uniforms for all surfaces go into one buffer with dynamic offsets (1376 bytes per
+**Borders** are part of the same draw call. The shape's coverage distance `d` (unit-square
+units) divided by the length of its screen-space gradient gives the distance from the edge
+in pixels, which is accurate to first order even under perspective; the border is the band
+`0..width` of that distance, composited over the fill before blending. Dashed, dotted and
+dash-dot borders also need the position *along* the outline: `om_core::border::border_path`
+sends the outline (any shape, long edges split into pieces of equal canvas length) with the
+pixel distance at each point, stretched so a whole number of dash periods fits around the
+shape. The shader finds the nearest outline segment and interpolates. Flow is an offset of
+`flow × local time`, so it follows speed and time offset like everything else.
+
+Uniforms for all surfaces go into one buffer with dynamic offsets (1936 bytes per
 surface, padded to the device's offset alignment).
 
 **Shader Library thumbnails** use the same pipeline: `Renderer::render_thumbnails`

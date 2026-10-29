@@ -35,9 +35,11 @@ development platform; Windows builds come for free.
   anything in front of the wall). Works with ellipse/triangle shapes, feather and opacity.
 - **Corner snapping** and **welded corners**: faces that share a corner move together,
   which makes mapping a cube easy. Hold Alt/Option to bypass either.
-- **Shader Library** (`Cmd+L`): 42 animated, live-previewed presets of 39 shaders (tunnel,
-  kaleidoscope, melt, fractal lace, quasicrystal, mandala, infinite zoom, Julia fractal,
-  lava lamp, caustics, silk, ink blot, galaxy, retro grid, electric, digital rain…), each
+- **Shader Library** (`Cmd+L`): 60 animated, live-previewed presets of 53 shaders (tunnel,
+  kaleidoscope, tie-dye, groovy 70s bands, Mandelbrot dive, gyroid flight, melt, fractal
+  lace, crystal, quasicrystal, mandala, flower of life, rosettes, Chladni figures, tumbling
+  blocks, lasers, bokeh, marble, equalizer, infinite zoom, Julia fractal, lava lamp,
+  caustics, silk, ink blot, galaxy, retro grid, electric, digital rain…), each
   with 14 color palettes and an extra control, all editable after adding.
 - **Sources**: solid colors, the GPU shaders above (including a calibration test grid),
   **images** (PNG/JPEG/GIF/WebP/BMP/TGA)
@@ -47,11 +49,16 @@ development platform; Windows builds come for free.
   mapping, plus texture offset, scale, rotation and flip.
 - **Animate**: scroll, spin, hue cycle, zoom pulse and opacity pulse/strobe (LFOs with
   sine/triangle/saw/square), per-surface speed and time offset, presets, **Stagger**.
+- **Borders** on any shape: color, width, solid / dashed / dotted / double / dash-dot,
+  with dashes that can flow around the shape. Drawn inside the edge; with no source,
+  a surface is an outline only.
 - Opacity, tint, feathered edges and all 24 **Photoshop blend modes** (Multiply, Screen,
   Overlay, Soft Light, Color Dodge, Difference, Hue, Color, Luminosity…), applied
   against everything below the surface. `Shift +` / `Shift -` cycles them.
 - **Projector output window**: drag it to the projector and press `F` for full screen.
-  Optional outlines on the projector help with aligning corners on the real object.
+  Optional outlines on the projector help with aligning corners on the real object, and
+  **Show Mouse on Projector** draws the pointer on the projection while you point at the
+  canvas, so you can trace the real object while looking at it.
 - Undo/redo, save/open (`.omap`, JSON), reopens the last project on launch
   (or the one given on the command line: `nawsmapper show.omap`).
 

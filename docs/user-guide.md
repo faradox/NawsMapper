@@ -40,6 +40,11 @@ With **Outlines on projector** on, the projector also shows thin outlines of all
 surfaces and the corners of the selected ones. That's very helpful while aligning.
 Turn it off for the show.
 
+**Output → Show Mouse on Projector** (also a checkbox in the toolbar while the output
+is open) draws an arrow on the projection wherever your pointer is on the canvas. Look
+at the wall, not the screen: move the pointer to a real edge and you see where it lands,
+which makes tracing an object with the **Pen** much easier.
+
 ## 3. Map an object
 
 The demo project contains three surfaces forming a box. Put a real box in front
@@ -87,6 +92,14 @@ Tip: use the **Test Grid** source while aligning. Its lines make distortion obvi
   Hue/Saturation/Color/Luminosity. Select surfaces and press `Shift +` / `Shift -` to
   step through them while watching the projection. Try a shader on top of a video
   with *Overlay* or *Color*, or a black-and-white shader with *Multiply* as a mask.
+
+- **Border** (Properties → Border) draws a line along the inside of the shape's edge:
+  pick a color, a width in pixels and a style (*Solid*, *Dashed*, *Dotted*, *Double*,
+  *Dash-dot*). Dashed and dotted borders have **Dash** and **Gap** lengths and a **Flow**
+  speed that sends the dashes around the shape ("marching ants"; negative goes the other
+  way). Dashes are spaced so they close neatly around the shape. Set **Source** to
+  *None* for an outline without a fill. Combined with **Stagger**, flowing borders on
+  several shapes make a chase.
 
 ## 5. Animate
 

@@ -24,6 +24,10 @@ struct SurfaceUniforms {
     stops: array<vec4<f32>, 6>,
     shape: vec4<f32>,      // outline point count, backdrop blend mode
     points: array<vec4<f32>, 64>, // outline in surface uv, two points per vec4
+    border: vec4<f32>,     // border color (straight alpha)
+    border_p: vec4<f32>,   // width px (0 = none), style, dash px, gap px
+    border_q: vec4<f32>,   // flow offset px, outline length px
+    arc: array<vec4<f32>, 32>, // distance along the outline at each point, px
 };
 
 @group(0) @binding(0) var<uniform> u: SurfaceUniforms;
@@ -665,6 +669,314 @@ fn field(kind: u32, uv: vec2<f32>, t: f32) -> vec2<f32> {
             let dot_ = 1.0 - smoothstep(-fw, fw, length(f) - rad);
             return vec2<f32>(wave * 0.8 + 0.1, dot_);
         }
+        // Tie-dye: rainbow spiral folds with crinkled dye lines.
+        case 41u: {
+            let crinkle = fbm(p * 5.0 + vec2<f32>(tt * 0.15, -tt * 0.1)) - 0.5;
+            let wobble = sin(a * TAU * 7.0 + r * 9.0 - tt) * 0.04;
+            // Two arms (a * 2) keep the palette seamless across the angle seam.
+            let x = a * 2.0 + r * scale * 1.2 - tt + (crinkle + wobble) * (0.15 + detail * 1.6);
+            let fold = 1.0 - abs(fract(x * 4.0) - 0.5) * 2.0;
+            let crease = pow(fold, 10.0) * (0.25 + 0.5 * detail);
+            return vec2<f32>(x, 1.0 - crease);
+        }
+        // Groovy: 70s wavy flower bands spreading from the center.
+        case 42u: {
+            let petals = 3.0 + floor(detail * 9.0);
+            let amp = 0.06;
+            let ph = a * TAU * petals + tt * 1.3;
+            let k = scale * 1.5;
+            let x = (r + sin(ph) * amp * (0.3 + r)) * k - tt;
+            // Filter width from the parts of `x`, since fwidth(a) jumps at the seam.
+            let w = max(fwidth(r) * k * 1.5 + abs(cos(ph)) * amp * (0.3 + r) * TAU * petals * aw * k, 1e-4);
+            let edge = smoothstep(1.0 - w, 1.0, fract(x));
+            return vec2<f32>((floor(x) + edge) * 0.3, 1.0);
+        }
+        // Twisted checker: a checkerboard swirling and breathing.
+        case 43u: {
+            let tw = (0.5 + detail * 6.0) * exp(-r * 2.0) * sin(tt * 0.6);
+            let q = rot2(tw + tt * 0.15) * p * (1.0 + 0.35 * sin(tt * 0.9 - r * 5.0));
+            let c = abs(aa_square(q.x * scale * 0.5) - aa_square(q.y * scale * 0.5));
+            return vec2<f32>(c * 0.5 + r * 1.2 - tt * 0.15, 1.0);
+        }
+        // Mandelbrot dive: zooms into Seahorse Valley and back out.
+        case 44u: {
+            let phase = smoothstep(0.0, 1.0, 1.0 - abs(1.0 - 2.0 * fract(tt * 0.03)));
+            // f32 runs out of precision below ~1e-4.
+            let deepest = mix(-3.0, -9.2, detail);
+            let zoom = exp(mix(0.0, deepest, phase)) * 6.4 / max(scale, 0.5);
+            let c = vec2<f32>(-0.7436439, 0.1318259) + rot2(tt * 0.1) * p * zoom;
+            let iters = 64 + i32(phase * detail * 160.0);
+            var z = vec2<f32>(0.0);
+            var esc = -1.0;
+            for (var k = 0; k < 224; k++) {
+                if k < iters && esc < 0.0 {
+                    z = vec2<f32>(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+                    let m2 = dot(z, z);
+                    if m2 > 256.0 {
+                        esc = f32(k) - log2(log2(m2)) + 4.0;
+                    }
+                }
+            }
+            let glow = mix(0.3, 1.0, pow(clamp(esc / f32(iters), 0.0, 1.0), 0.4));
+            return select(vec2<f32>(log2(esc + 1.0) * 0.6 - tt * 0.1, glow), vec2<f32>(0.0), esc < 0.0);
+        }
+        // Crystal: a kaleidoscopic fold-and-scale fractal of glowing lines.
+        case 45u: {
+            var q = p * (4.0 / max(scale, 0.5));
+            let fw = length(fwidth(q));
+            let folds = 3 + i32(detail * 6.0);
+            var s = 1.0;
+            var trap = 1e3;
+            var hit = 0.0;
+            for (var k = 0; k < 9; k++) {
+                if k < folds {
+                    let kf = f32(k);
+                    q = abs(q);
+                    q = rot2(0.55 + 0.25 * sin(tt * 0.23 + kf * 0.7)) * q;
+                    q = q * 1.5 - vec2<f32>(0.85 + 0.2 * sin(tt * 0.17), 0.45 + 0.15 * cos(tt * 0.13));
+                    s *= 1.5;
+                    let d = abs(q.y) / s;
+                    if d < trap {
+                        trap = d;
+                        hit = kf;
+                    }
+                }
+            }
+            let line = 1.0 - smoothstep(0.0, fw * 1.5, trap);
+            let glow = exp(-trap / (fw * 12.0));
+            return vec2<f32>(hit * 0.17 + r * 0.4 + tt * 0.05, max(line, glow * 0.55) + 0.04);
+        }
+        // Chladni figures: sand gathering on the still lines of a vibrating plate.
+        case 46u: {
+            let q = p * 2.0 * TAU * 0.5;
+            let step_t = tt * 0.25;
+            let i = floor(step_t);
+            let blend_t = smoothstep(0.35, 0.65, fract(step_t));
+            let modes = 2.0 + max(scale, 1.0);
+            let n0 = 1.0 + floor(hash2(vec2<f32>(i, 1.3)) * modes);
+            let m0 = n0 + 1.0 + floor(hash2(vec2<f32>(i, 7.1)) * 3.0);
+            let n1 = 1.0 + floor(hash2(vec2<f32>(i + 1.0, 1.3)) * modes);
+            let m1 = n1 + 1.0 + floor(hash2(vec2<f32>(i + 1.0, 7.1)) * 3.0);
+            let f0 = cos(n0 * q.x) * cos(m0 * q.y) - cos(m0 * q.x) * cos(n0 * q.y);
+            let f1 = cos(n1 * q.x) * cos(m1 * q.y) - cos(m1 * q.x) * cos(n1 * q.y);
+            let f = mix(f0, f1, blend_t);
+            let fw = max(fwidth(f), 1e-4);
+            let line = 1.0 - smoothstep(0.0, fw * (1.0 + detail * 8.0), abs(f));
+            let glow = exp(-abs(f) / (fw * (4.0 + detail * 20.0)));
+            return vec2<f32>(0.3 + f * 0.35 + r * 0.3, max(line, glow * 0.4) + 0.05 * abs(f));
+        }
+        // Flower of life: overlapping circles on a hexagonal grid.
+        case 47u: {
+            let g = rot2(tt * 0.05) * p * scale;
+            let fw = length(fwidth(g));
+            let rad = 1.0 + 0.12 * sin(tt * 0.8) * detail;
+            // Skewed coordinates of the hexagonal lattice.
+            let j0 = round(g.y / 0.8660254);
+            let i0 = round(g.x - j0 * 0.5);
+            var dmin = 1e3;
+            var count = 0.0;
+            var near = vec2<f32>(0.0);
+            for (var j = -2; j <= 2; j++) {
+                for (var i = -2; i <= 2; i++) {
+                    let cj = j0 + f32(j);
+                    let c = vec2<f32>(i0 + f32(i) + cj * 0.5, cj * 0.8660254);
+                    let dc = length(g - c);
+                    let d = abs(dc - rad);
+                    if d < dmin {
+                        dmin = d;
+                        near = c;
+                    }
+                    count += 1.0 - smoothstep(rad - fw, rad + fw, dc);
+                }
+            }
+            let wdt = 0.015 + detail * 0.05;
+            let line = 1.0 - smoothstep(wdt - fw, wdt + fw, dmin);
+            let wave = 0.5 + 0.5 * sin(length(near) * 0.8 - tt * 2.0);
+            return vec2<f32>(count * 0.18 + wave * 0.3 - tt * 0.05, max(line * (0.6 + 0.4 * wave), count * 0.07));
+        }
+        // Rosettes: rose curves of several sizes turning against each other.
+        case 48u: {
+            let fw = length(fwidth(p));
+            let layers = 2 + i32(detail * 4.0);
+            let k0 = max(floor(scale * 0.5), 1.0);
+            var glow = 0.0;
+            var pos = 0.0;
+            for (var l = 0; l < 6; l++) {
+                if l < layers {
+                    let lf = f32(l);
+                    let k = k0 + lf;
+                    let dir = select(-1.0, 1.0, l % 2 == 0);
+                    let th = a * TAU - tt * 0.25 * dir / (1.0 + lf * 0.3);
+                    let big = 0.45 - lf * 0.06;
+                    let cr = cos(k * th);
+                    // Distance to r = big * |cos(k θ)|, divided by its gradient.
+                    let f = r - big * abs(cr);
+                    let gs = big * k * sin(k * th) / max(r, 1e-3);
+                    let grad = sqrt(1.0 + gs * gs);
+                    let d = abs(f) / grad;
+                    let g = (1.0 - smoothstep(fw * 0.5, fw * 2.0, d)) + exp(-d / (fw * 10.0)) * 0.35;
+                    glow += g;
+                    pos += g * lf * 0.22;
+                }
+            }
+            return vec2<f32>(pos / max(glow, 1e-3) + r * 0.5 + tt * 0.04, min(glow, 1.0));
+        }
+        // Tumbling blocks: isometric cubes lit by a turning light.
+        case 49u: {
+            let g = p * scale;
+            let rv = vec2<f32>(1.0, 1.7320508);
+            let hv = rv * 0.5;
+            let ga = g - rv * floor(g / rv) - hv;
+            let gb = (g - hv) - rv * floor((g - hv) / rv) - hv;
+            let gv = select(gb, ga, dot(ga, ga) < dot(gb, gb));
+            let id = g - gv;
+            let fw = length(fwidth(g));
+            // Up is -y on screen; edges from the near corner point down, up-right and up-left.
+            let q = vec2<f32>(gv.x, -gv.y);
+            let e1 = vec2<f32>(0.8660254, 0.5);
+            let e2 = vec2<f32>(-0.8660254, 0.5);
+            let e3 = vec2<f32>(0.0, -1.0);
+            let c12 = e1.x * q.y - e1.y * q.x;
+            let c2 = q.x * e2.y - q.y * e2.x;
+            let top = clamp(c12 / fw + 0.5, 0.0, 1.0) * clamp(c2 / fw + 0.5, 0.0, 1.0);
+            let c23 = e2.x * q.y - e2.y * q.x;
+            let c3 = q.x * e3.y - q.y * e3.x;
+            let left = clamp(c23 / fw + 0.5, 0.0, 1.0) * clamp(c3 / fw + 0.5, 0.0, 1.0);
+            let right = clamp(1.0 - top - left, 0.0, 1.0);
+            let light = tt * 0.6;
+            let lit = top * (0.6 + 0.4 * cos(1.5708 - light)) + left * (0.6 + 0.4 * cos(3.6652 - light))
+                + right * (0.6 + 0.4 * cos(5.7596 - light));
+            let ag = abs(gv);
+            let hexd = max(dot(ag, normalize(rv)), ag.x);
+            let wdt = detail * 0.06;
+            let edge = 1.0 - smoothstep(wdt, wdt + fw, 0.5 - hexd);
+            let wave = 0.5 + 0.5 * sin(length(id) * 0.5 - tt * 1.5);
+            let pos = hash2(id) * 0.2 + wave * 0.5 + top * 0.1 - right * 0.1;
+            return vec2<f32>(pos, lit * (1.0 - edge * 0.9));
+        }
+        // Lasers: fans of beams sweeping through haze.
+        case 50u: {
+            let q = (ruv + 0.5) * vec2<f32>(aspect, 1.0);
+            let px = max(length(fwidth(q)), 1e-4);
+            let beams = max(floor(scale * 1.5), 2.0);
+            var glow = 0.0;
+            var pos = 0.0;
+            for (var s = 0; s < 3; s++) {
+                let sf = f32(s);
+                let src = vec2<f32>((0.5 + (sf - 1.0) * 0.35) * aspect, 1.02);
+                let v = q - src;
+                let len = length(v);
+                let ang = atan2(v.x, -v.y);
+                let base = sin(tt * 0.7 + sf * 2.1) * 0.5;
+                let spread = 0.12 + 0.08 * sin(tt * 0.45 + sf * 1.3);
+                let mid = (beams - 1.0) * 0.5;
+                let idx = clamp(round((ang - base) / spread + mid), 0.0, beams - 1.0) - mid;
+                let beam_ang = base + idx * spread;
+                let d = len * abs(sin(ang - beam_ang));
+                let on = step(0.3, hash2(vec2<f32>(idx + sf * 17.0, floor(tt * 2.0 + sf * 0.37))));
+                let core = 1.0 - smoothstep(px * 0.5, px * 2.0, d);
+                let haze = exp(-d / (0.006 + detail * 0.03)) * (0.25 + detail * 0.4);
+                let g = (core + haze) * on * exp(-len * 0.6) * step(0.0, -v.y + 0.02);
+                glow += g;
+                pos += g * (sf * 0.33 + idx * 0.06 + tt * 0.1);
+            }
+            let fog = detail * 0.12 * (1.0 - q.y * 0.6) * (0.6 + 0.4 * value_noise(q * 3.0 + vec2<f32>(tt * 0.2, 0.0)));
+            return vec2<f32>(pos / max(glow, 1e-3), glow + fog);
+        }
+        // Bokeh: out-of-focus lights drifting in three depths.
+        case 51u: {
+            var glow = 0.0;
+            var pos = 0.0;
+            for (var l = 0; l < 3; l++) {
+                let lf = f32(l);
+                let g = p * scale * (0.5 + lf * 0.45) + vec2<f32>(lf * 5.3 + tt * (0.12 + lf * 0.05), lf * 2.9 - tt * 0.07);
+                let id = floor(g);
+                let h = hash2(id + lf * 11.0);
+                let f = fract(g) - 0.5 - (hash22(id + 2.0 + lf) - 0.5) * 0.36;
+                let rad = mix(0.16, 0.31, hash2(id + 5.0));
+                let d = length(f) / rad;
+                let soft = max((0.04 + detail * 0.5) * (1.0 + (2.0 - lf)), length(fwidth(g)) / rad);
+                let disc = 1.0 - smoothstep(1.0 - soft, 1.0, d);
+                let rim = smoothstep(0.55, 1.0, d) * disc * 0.35;
+                let tw = 0.55 + 0.45 * sin(tt * (1.0 + h * 2.0) + h * TAU);
+                let b = (disc * 0.55 + rim) * tw * step(0.45, h) * (0.6 + lf * 0.2);
+                glow += b;
+                pos += b * (h * 0.7 + lf * 0.2);
+            }
+            return vec2<f32>(pos / max(glow, 1e-3), glow);
+        }
+        // Marble: slowly flowing stone with bright veins.
+        case 52u: {
+            let q = p * scale * 0.5;
+            let turb = fbm(q * 1.5 + vec2<f32>(tt * 0.1, -tt * 0.07)) + 0.5 * fbm(q * 3.1 - vec2<f32>(tt * 0.05, 0.0));
+            let x = q.x * 1.6 + q.y + turb * (1.5 + detail * 6.0);
+            let v = 0.5 + 0.5 * sin(x * 3.0);
+            let vein = pow(v, 12.0);
+            return vec2<f32>(0.15 + (1.0 - v) * 0.35 + vein * 0.5 + turb * 0.15, 0.65 + 0.35 * max(vein, 1.0 - v));
+        }
+        // Gyroid: flying down the helical channels of an endless 3D lattice.
+        case 53u: {
+            let k = max(scale, 0.5) * 0.75;
+            // The line x = π/2, y = 0 never touches the surface: a clear flight path.
+            let ro = vec3<f32>(1.5707963 / k, 0.0, tt * 2.0);
+            var rd = normalize(vec3<f32>(p * 1.4, 1.0));
+            let look = rot2(0.35 * sin(tt * 0.21)) * rd.xz;
+            rd = vec3<f32>(look.x, rd.y, look.y);
+            let roll = rot2(tt * 0.1) * rd.xy;
+            rd = vec3<f32>(roll, rd.z);
+            let thick = 0.03 + detail * 0.3;
+            var dist = 0.0;
+            var hit = -1.0;
+            var glow = 0.0;
+            for (var i = 0; i < 64; i++) {
+                if hit < 0.0 {
+                    let q = (ro + rd * dist) * k;
+                    let gy = (abs(dot(sin(q), cos(q.yzx))) - thick) / k;
+                    glow += exp(-max(gy, 0.0) * k * 8.0) * 0.004;
+                    if gy < 0.002 {
+                        hit = dist;
+                    }
+                    dist += gy * 0.5;
+                    if dist * k > 60.0 {
+                        hit = dist;
+                    }
+                }
+            }
+            let q = (ro + rd * dist) * k;
+            let s = sin(q);
+            let c = cos(q);
+            let n = normalize(vec3<f32>(c.x * c.y - s.z * s.x, c.y * c.z - s.x * s.y, c.z * c.x - s.y * s.z));
+            let shade = pow(abs(dot(n, rd)), 1.5);
+            let bands = 0.5 + 0.5 * sin((q.x + q.y + q.z) * 3.0);
+            let fog = exp(-dist * k * 0.12);
+            return vec2<f32>(dist * k * 0.06 + bands * 0.15 + shade * 0.2, shade * (0.7 + 0.3 * bands) * fog + glow);
+        }
+        // Equalizer: LED bars dancing to an imaginary beat.
+        case 54u: {
+            let q = ruv + 0.5;
+            let bars = max(floor(scale * 4.0), 3.0);
+            let bx = q.x * bars;
+            let col = floor(bx);
+            let h = hash2(vec2<f32>(col, 3.7));
+            let beat = pow(0.5 + 0.5 * sin(tt * TAU * 0.5), 6.0);
+            let level = clamp(
+                0.12 + 0.5 * (0.5 + 0.5 * sin(tt * (2.0 + h * 3.0) + h * TAU))
+                    * (0.6 + 0.4 * sin(tt * 0.9 * (1.0 + h) + col * 0.4)) + beat * 0.35 * (1.0 - abs(q.x - 0.5)),
+                0.0,
+                1.0,
+            );
+            let rows = 8.0 + floor(detail * 32.0);
+            let y = 1.0 - q.y;
+            let row = floor(y * rows);
+            let lit = step((row + 0.5) / rows, level);
+            let fx = fract(bx);
+            let fy = fract(y * rows);
+            let wx = max(fwidth(bx), 1e-4);
+            let wy = max(fwidth(y * rows), 1e-4);
+            let cell = smoothstep(0.1, 0.1 + wx, fx) * (1.0 - smoothstep(0.9 - wx, 0.9, fx))
+                * smoothstep(0.12, 0.12 + wy, fy) * (1.0 - smoothstep(0.88 - wy, 0.88, fy));
+            return vec2<f32>(row / rows * 0.9, cell * mix(0.07, 1.0, lit));
+        }
         default: {
             return vec2<f32>(0.0, 1.0);
         }
@@ -831,6 +1143,82 @@ fn polygon_distance(p: vec2<f32>) -> f32 {
     return -s * sqrt(d);
 }
 
+// ---- Borders --------------------------------------------------------------
+
+// Coverage of the pixel [x - 0.5, x + 0.5] by the interval [lo, hi].
+fn box_coverage(x: f32, lo: f32, hi: f32) -> f32 {
+    return clamp(min(x + 0.5, hi) - max(x - 0.5, lo), 0.0, 1.0);
+}
+
+fn arc_length(i: u32) -> f32 {
+    return u.arc[i / 4u][i % 4u];
+}
+
+// Distance along the outline (px) at the outline point nearest to `p`.
+fn outline_position(p: vec2<f32>) -> f32 {
+    let n = u32(u.shape.x);
+    var best = 1e9;
+    var s = 0.0;
+    for (var i = 0u; i < n; i++) {
+        let j = select(i + 1u, 0u, i + 1u == n);
+        let a = outline_point(i);
+        let e = outline_point(j) - a;
+        let w = p - a;
+        let t = clamp(dot(w, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
+        let b = w - e * t;
+        let d = dot(b, b);
+        if d < best {
+            best = d;
+            s = mix(arc_length(i), select(arc_length(j), u.border_q.y, j == 0u), t);
+        }
+    }
+    return s;
+}
+
+// Dashes of length `len` centered at `c + k * period` along the outline.
+fn dash_coverage(s: f32, len: f32, period: f32, c: f32) -> f32 {
+    let m = s - c - period * round((s - c) / period);
+    return clamp(len * 0.5 - abs(m) + 0.5, 0.0, 1.0);
+}
+
+// Round dots of diameter `w` centered on the border line.
+fn dot_coverage(s: f32, x: f32, w: f32, period: f32, c: f32) -> f32 {
+    let m = s - c - period * round((s - c) / period);
+    return clamp(w * 0.5 - length(vec2<f32>(m, x - w * 0.5)) + 0.5, 0.0, 1.0);
+}
+
+// How much of this pixel the border covers. `inside_px` is the distance
+// from the shape's edge in pixels; the border runs along the inside.
+fn border_coverage(suv: vec2<f32>, inside_px: f32) -> f32 {
+    let w = u.border_p.x;
+    // Same edge position as the fill's antialiasing ramp.
+    let x = inside_px - 0.5;
+    let style = u32(u.border_p.y);
+    if style == 3u {
+        let third = w / 3.0;
+        return max(box_coverage(x, 0.0, third), box_coverage(x, w - third, w));
+    }
+    let band = box_coverage(x, 0.0, w);
+    if style == 0u || band <= 0.0 {
+        return band;
+    }
+    let s = outline_position(suv) - u.border_q.x;
+    let dash = u.border_p.z;
+    let gap = u.border_p.w;
+    switch style {
+        case 1u: {
+            return band * dash_coverage(s, dash, dash + gap, dash * 0.5);
+        }
+        case 2u: {
+            return dot_coverage(s, x, w, w + gap, w * 0.5);
+        }
+        default: {
+            let period = dash + w + 2.0 * gap;
+            return max(band * dash_coverage(s, dash, period, dash * 0.5), dot_coverage(s, x, w, period, dash + gap + w * 0.5));
+        }
+    }
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let inv_h = mat3x3<f32>(u.inv_h0.xyz, u.inv_h1.xyz, u.inv_h2.xyz);
@@ -849,6 +1237,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = mask_distance(suv, u32(u.misc.w));
     let aa = max(fwidth(d), 1e-5);
     let coverage = smoothstep(0.0, max(u.misc.z, aa), d);
+    // Pixels from the edge: `d` is in surface uv, its gradient converts it
+    // (this also keeps borders even under perspective).
+    let inside_px = d / max(length(vec2<f32>(dpdx(d), dpdy(d))), 1e-7);
 
     let kind = u32(u.gen.x);
     let tex_color = textureSample(src_tex, src_samp, tuv);
@@ -862,7 +1253,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     var rgb = clamp(hue_rotate(color.rgb, u.misc.y), vec3<f32>(0.0), vec3<f32>(1.0)) * u.tint.rgb;
-    let alpha = color.a * u.tint.a * u.misc.x * coverage;
+    var alpha = color.a * u.tint.a * u.misc.x * coverage;
+    // The border goes over the fill (straight alpha "over"), before blending.
+    if u.border_p.x > 0.0 {
+        let ba = u.border.a * u.misc.x * border_coverage(suv, inside_px);
+        let a = ba + alpha * (1.0 - ba);
+        rgb = (u.border.rgb * ba + rgb * alpha * (1.0 - ba)) / max(a, 1e-5);
+        alpha = a;
+    }
     // Backdrop blend modes (W3C compositing): blend with what's below, then
     // composite normally. Fixed-function modes have mode 0.
     let mode = u32(u.shape.y);

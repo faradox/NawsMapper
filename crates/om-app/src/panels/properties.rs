@@ -4,10 +4,12 @@
 //! user changes is then copied to every other selected surface, leaving
 //! their other settings alone (see `om_core::diff`).
 
-use egui::{RichText, Slider, Ui};
+use egui::{RichText, Slider, SliderClamping, Ui};
 use glam::Vec2;
 use om_core::anim::{Lfo, Wave};
-use om_core::{BlendMode, Mapping, Mask, Project, Surface, SurfaceId, diff::propagate_changes};
+use om_core::{
+    BlendMode, Border, BorderStyle, Mapping, Mask, Project, Surface, SurfaceId, diff::propagate_changes,
+};
 
 use crate::app::{Action, NawsMapperApp};
 use crate::widgets::{color_edit, grid, prop_label, section, vec2_drag};
@@ -217,6 +219,8 @@ fn surface_props(ui: &mut Ui, app: &mut NawsMapperApp, s: &mut Surface, count: u
         });
     });
 
+    section(ui, "Border", |ui| border_props(ui, &mut s.border));
+
     if !s.cutout {
         section(ui, "Texture", |ui| {
             grid(ui, "texture_props", |ui| {
@@ -278,6 +282,56 @@ fn surface_props(ui: &mut Ui, app: &mut NawsMapperApp, s: &mut Surface, count: u
             }
         });
     }
+}
+
+fn border_props(ui: &mut Ui, b: &mut Border) {
+    ui.checkbox(&mut b.enabled, "Border").on_hover_text(
+        "A line along the inside of the shape's edge.\nSet Source to None for an outline only.",
+    );
+    if !b.enabled {
+        return;
+    }
+    grid(ui, "border_props", |ui| {
+        prop_label(ui, "Color", "");
+        color_edit(ui, &mut b.color);
+        ui.end_row();
+
+        prop_label(ui, "Width", "Measured inward from the edge, in canvas pixels");
+        ui.add(
+            Slider::new(&mut b.width, 0.5..=100.0)
+                .logarithmic(true)
+                .clamping(SliderClamping::Never)
+                .suffix(" px"),
+        );
+        ui.end_row();
+
+        prop_label(ui, "Style", "");
+        egui::ComboBox::from_id_salt("border_style").selected_text(b.style.label()).show_ui(ui, |ui| {
+            for style in BorderStyle::ALL {
+                ui.selectable_value(&mut b.style, style, style.label());
+            }
+        });
+        ui.end_row();
+
+        if b.style.has_dashes() {
+            prop_label(ui, "Dash", "Length of each dash");
+            ui.add(egui::DragValue::new(&mut b.dash).range(0.5..=2000.0).speed(0.5).suffix(" px"));
+            ui.end_row();
+        }
+        if b.style.is_broken() {
+            prop_label(ui, "Gap", "Space between dashes or dots");
+            ui.add(egui::DragValue::new(&mut b.gap).range(0.0..=2000.0).speed(0.5).suffix(" px"));
+            ui.end_row();
+
+            prop_label(
+                ui,
+                "Flow",
+                "Moves the dashes around the shape, pixels per second.\nNegative values go the other way.",
+            );
+            ui.add(Slider::new(&mut b.flow, -400.0..=400.0).clamping(SliderClamping::Never).suffix(" px/s"));
+            ui.end_row();
+        }
+    });
 }
 
 fn animation_props(ui: &mut Ui, app: &mut NawsMapperApp, s: &mut Surface, count: usize) {

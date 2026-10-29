@@ -20,6 +20,23 @@ Decisions:
 - → docs/trackers/NNNN-....md
 ```
 
+## 2026-10-29: v0.4, feature requests
+
+- Borders on shapes, with control over color, thickness and dashed/dotted/solid/etc.
+- "Show mouse on projector" in the Output menu (a toggle), to trace things with the
+  mouse while looking at the output.
+- She **loves** the shaders: wants many more, varied, with cool effects and
+  psychedelic patterns.
+
+Decisions:
+- Borders drawn inside the shape's edge (they never spill off the object), in canvas
+  pixels; styles Solid, Dashed, Dotted, Double, Dash-dot, plus a Flow speed for
+  marching dashes. Outline-only shapes come from Source = None.
+- Projector draws its own arrow at the editor pointer's canvas position (egui overlay,
+  never in the output texture).
+- 14 new shaders and 18 presets, leaning psychedelic.
+  → [trackers/0006-borders-cursor-shaders.md](trackers/0006-borders-cursor-shaders.md)
+
 ## 2026-10-29: rename
 
 Decisions:

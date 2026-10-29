@@ -2,7 +2,8 @@
 //! canvas edge-to-edge. Drag it onto the projector's screen and press `F`
 //! (or double-click) to go full screen.
 
-use egui::{Color32, Key, Pos2, Rect, Sense, ViewportBuilder, ViewportCommand, ViewportId};
+use egui::{Color32, Key, Pos2, Rect, Sense, Stroke, ViewportBuilder, ViewportCommand, ViewportId};
+use glam::Vec2;
 use om_core::Project;
 
 use crate::editor::{Selection, draw_output_overlays};
@@ -13,11 +14,16 @@ pub struct OutputWindow {
     /// which makes aligning corners on the real object much easier.
     pub show_outlines: bool,
     pub fullscreen: bool,
+    /// Draw a mouse pointer on the projector where the pointer is on the
+    /// editor canvas, so you can trace the real object while looking at it.
+    pub show_cursor: bool,
+    /// Last OS cursor visibility sent to the window.
+    cursor_visible: Option<bool>,
 }
 
 impl Default for OutputWindow {
     fn default() -> Self {
-        Self { open: false, show_outlines: true, fullscreen: false }
+        Self { open: false, show_outlines: true, fullscreen: false, show_cursor: false, cursor_visible: None }
     }
 }
 
@@ -28,8 +34,10 @@ impl OutputWindow {
         tex: egui::TextureId,
         project: &Project,
         selection: &Selection,
+        pointer: Option<Vec2>,
     ) {
         if !self.open {
+            self.cursor_visible = None;
             return;
         }
         let builder =
@@ -51,6 +59,15 @@ impl OutputWindow {
             if self.show_outlines {
                 draw_output_overlays(painter, rect, project, selection);
             }
+            if self.show_cursor
+                && let Some(p) = pointer
+            {
+                let size = project.canvas.size();
+                let at = rect.min + egui::vec2(p.x / size.x * rect.width(), p.y / size.y * rect.height());
+                if rect.contains(at) {
+                    draw_pointer(painter, at, (rect.height() / 36.0).clamp(18.0, 48.0));
+                }
+            }
             if !fullscreen && resp.hovered() {
                 painter.text(
                     rect.center_bottom() - egui::vec2(0.0, 12.0),
@@ -64,10 +81,32 @@ impl OutputWindow {
             let toggle = resp.double_clicked() || ui.input(|i| i.key_pressed(Key::F));
             let leave = ui.input(|i| i.key_pressed(Key::Escape));
             if toggle || (leave && fullscreen) {
-                let fs = toggle && !fullscreen;
-                ui.ctx().send_viewport_cmd(ViewportCommand::Fullscreen(fs));
-                ui.ctx().send_viewport_cmd(ViewportCommand::CursorVisible(!fs));
+                ui.ctx().send_viewport_cmd(ViewportCommand::Fullscreen(toggle && !fullscreen));
+            }
+            // Full screen hides the OS pointer, unless the projector shows the mouse anyway.
+            let visible = !fullscreen || self.show_cursor;
+            if self.cursor_visible != Some(visible) {
+                ui.ctx().send_viewport_cmd(ViewportCommand::CursorVisible(visible));
+                self.cursor_visible = Some(visible);
             }
         });
     }
+}
+
+/// A classic arrow pointer, `size` px tall, with its tip at `tip`: white with
+/// a black outline, so it reads on any content.
+fn draw_pointer(painter: &egui::Painter, tip: Pos2, size: f32) {
+    const OUTLINE: [[f32; 2]; 7] =
+        [[0.0, 0.0], [0.0, 17.0], [4.0, 13.0], [7.0, 20.0], [9.0, 19.0], [6.0, 12.0], [12.0, 12.0]];
+    // The outline is not convex: fill it as triangles.
+    const TRIANGLES: [u32; 15] = [0, 1, 2, 0, 2, 5, 0, 5, 6, 2, 3, 4, 2, 4, 5];
+    let k = size / 20.0;
+    let pts: Vec<Pos2> = OUTLINE.iter().map(|[x, y]| tip + egui::vec2(x * k, y * k)).collect();
+    let mut mesh = egui::Mesh::default();
+    for p in &pts {
+        mesh.colored_vertex(*p, Color32::WHITE);
+    }
+    mesh.indices.extend(TRIANGLES);
+    painter.add(mesh);
+    painter.add(egui::Shape::closed_line(pts, Stroke::new((size / 14.0).max(1.5), Color32::BLACK)));
 }

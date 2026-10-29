@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::Color;
 pub use crate::anim::TextureTransform;
 use crate::anim::{Animation, Lfo, Wave};
+use crate::border::Border;
 use crate::shape::{Mask, PathPoint};
 
 /// Bumped whenever the on-disk format changes incompatibly.
@@ -90,10 +91,24 @@ pub enum Pattern {
     Glitch,
     Zoom,
     Halftone,
+    TieDye,
+    Groovy,
+    TwistedChecker,
+    Mandelbrot,
+    Crystal,
+    Chladni,
+    FlowerOfLife,
+    Rosettes,
+    Cubes,
+    Lasers,
+    Bokeh,
+    Marble,
+    Gyroid,
+    Equalizer,
 }
 
 impl Pattern {
-    pub const ALL: [Pattern; 39] = [
+    pub const ALL: [Pattern; 53] = [
         Pattern::Gradient,
         Pattern::Checker,
         Pattern::Stripes,
@@ -133,6 +148,20 @@ impl Pattern {
         Pattern::Glitch,
         Pattern::Zoom,
         Pattern::Halftone,
+        Pattern::TieDye,
+        Pattern::Groovy,
+        Pattern::TwistedChecker,
+        Pattern::Mandelbrot,
+        Pattern::Crystal,
+        Pattern::Chladni,
+        Pattern::FlowerOfLife,
+        Pattern::Rosettes,
+        Pattern::Cubes,
+        Pattern::Lasers,
+        Pattern::Bokeh,
+        Pattern::Marble,
+        Pattern::Gyroid,
+        Pattern::Equalizer,
     ];
 
     pub fn label(self) -> &'static str {
@@ -176,6 +205,20 @@ impl Pattern {
             Pattern::Glitch => "Glitch",
             Pattern::Zoom => "Infinite Zoom",
             Pattern::Halftone => "Halftone",
+            Pattern::TieDye => "Tie-Dye",
+            Pattern::Groovy => "Groovy",
+            Pattern::TwistedChecker => "Twisted Checker",
+            Pattern::Mandelbrot => "Mandelbrot Dive",
+            Pattern::Crystal => "Crystal",
+            Pattern::Chladni => "Chladni",
+            Pattern::FlowerOfLife => "Flower of Life",
+            Pattern::Rosettes => "Rosettes",
+            Pattern::Cubes => "Tumbling Blocks",
+            Pattern::Lasers => "Lasers",
+            Pattern::Bokeh => "Bokeh",
+            Pattern::Marble => "Marble",
+            Pattern::Gyroid => "Gyroid",
+            Pattern::Equalizer => "Equalizer",
         }
     }
 
@@ -214,6 +257,20 @@ impl Pattern {
             Pattern::Glitch => "Chaos",
             Pattern::Zoom => "Twist",
             Pattern::Halftone => "Dot size",
+            Pattern::TieDye => "Crinkle",
+            Pattern::Groovy => "Petals",
+            Pattern::TwistedChecker => "Twist",
+            Pattern::Mandelbrot => "Depth",
+            Pattern::Crystal => "Folds",
+            Pattern::Chladni => "Glow",
+            Pattern::FlowerOfLife => "Line width",
+            Pattern::Rosettes => "Layers",
+            Pattern::Cubes => "Edges",
+            Pattern::Lasers => "Haze",
+            Pattern::Bokeh => "Blur",
+            Pattern::Marble => "Veins",
+            Pattern::Gyroid => "Thickness",
+            Pattern::Equalizer => "Segments",
             _ => return None,
         })
     }
@@ -582,6 +639,8 @@ pub struct Surface {
     pub blend: BlendMode,
     /// Soft edge width as a fraction of the surface (0..0.5).
     pub feather: f32,
+    /// Stroke along the inside of the shape's edge.
+    pub border: Border,
     pub mapping: Mapping,
     pub texture: TextureTransform,
     pub animation: Animation,
@@ -611,6 +670,7 @@ impl Surface {
             tint: [1.0; 4],
             blend: BlendMode::Normal,
             feather: 0.0,
+            border: Border::default(),
             mapping: Mapping::Surface,
             texture: TextureTransform::default(),
             animation: Animation::default(),
@@ -880,6 +940,8 @@ mod tests {
         assert_eq!(Pattern::Rain.shader_index(), 26);
         assert_eq!(Pattern::Melt.shader_index(), 27);
         assert_eq!(Pattern::Halftone.shader_index(), 40);
+        assert_eq!(Pattern::TieDye.shader_index(), 41);
+        assert_eq!(Pattern::Equalizer.shader_index(), 54);
     }
 
     #[test]

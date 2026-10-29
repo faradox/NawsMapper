@@ -144,6 +144,10 @@ pub fn menu_bar(ui: &mut Ui, app: &mut NawsMapperApp) {
                     app.act(Action::ToggleOutput);
                 }
                 ui.checkbox(&mut app.output.show_outlines, "Show Outlines on Projector");
+                ui.checkbox(&mut app.output.show_cursor, "Show Mouse on Projector").on_hover_text(
+                    "Draw the mouse pointer on the projected image while it is over the canvas, \
+                     so you can trace the real object while looking at it",
+                );
             });
             ui.menu_button("Help", |ui| {
                 ui.label(RichText::new("NawsMapper").strong());
@@ -268,6 +272,8 @@ pub fn toolbar(ui: &mut Ui, app: &mut NawsMapperApp) {
             }
             if app.output.open {
                 ui.checkbox(&mut app.output.show_outlines, "Outlines on projector");
+                ui.checkbox(&mut app.output.show_cursor, "Mouse on projector")
+                    .on_hover_text("Show the mouse pointer on the projector while it is over the canvas");
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
