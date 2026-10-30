@@ -1,5 +1,7 @@
 # NawsMapper
 
+![NawsMapper: three faces of a box mapped with animated shaders, layers on the left, surface properties on the right](docs/images/screenshot.png)
+
 Projection mapping software for designers. You draw surfaces over the real
 objects you project onto, fill them with media or generated patterns, and
 animate them. The interface feels familiar to anyone who knows Photoshop.
