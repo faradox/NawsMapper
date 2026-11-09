@@ -159,7 +159,7 @@ crates/
   om-app/     the desktop app: egui panels, canvas editor, projector window
 docs/         architecture, user guide, roadmap, platform notes, implementation trackers
 packaging/    macOS Info.plist
-scripts/      macOS bundling, release publishing and release notes
+scripts/      macOS bundling, version bumps (make bump), release publishing and notes
 ```
 
 ## Documentation

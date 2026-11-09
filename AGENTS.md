@@ -37,13 +37,14 @@ cargo run --release            # what users get
 cargo fmt                      # rustfmt.toml: max_width 110
 cargo clippy --all-targets -- -D warnings
 cargo test                     # includes WGSL validation through naga
+make bump [patch|minor|major]  # version bump + commit; `git push` publishes the release
 ```
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs fmt, clippy with
 `-D warnings` and tests on Linux. It builds a universal macOS `.dmg` (via
 `scripts/bundle-macos.sh`) and a Windows `.exe`. Keep all of them green: every green
 push to `main` publishes them on the Releases page as the development build, and bumping
-the workspace `version` in `Cargo.toml` cuts a numbered release. See
+the workspace `version` (`make bump`) cuts a numbered release. See
 [docs/releasing.md](docs/releasing.md).
 
 ### Rules on the development machine

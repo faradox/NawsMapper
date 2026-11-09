@@ -26,10 +26,19 @@ rename them.
 
 ## Cutting a numbered release
 
-1. Bump `version` under `[workspace.package]` in `Cargo.toml` (e.g. `0.6.0` → `0.7.0`) and
-   run `cargo check` so `Cargo.lock` follows.
-2. Update `README.md` (status line) and `docs/roadmap.md`.
-3. Commit (`chore(release): bump version to 0.7.0`) and push to `main`.
+```sh
+make bump            # 0.7.0 -> 0.7.1 (patch, the default)
+make bump minor      # 0.7.0 -> 0.8.0
+make bump major      # 0.7.0 -> 1.0.0
+git push
+```
+
+`make bump` ([scripts/bump-version.sh](../scripts/bump-version.sh)) bumps `version` under
+`[workspace.package]` in `Cargo.toml`, updates the workspace crates in `Cargo.lock`
+(offline) and the README status line, and commits exactly those three files as
+`chore(release): bump version to X.Y.Z`. It stops if they have other uncommitted
+changes, and it neither pushes nor tags. Update `docs/roadmap.md` by hand when a
+milestone is done.
 
 When CI is green, `v0.7.0` appears on the Releases page with the downloads, first-start
 instructions and a "What's new" list. There's no tag to push by hand. The workflow
