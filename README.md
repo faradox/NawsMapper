@@ -9,7 +9,7 @@ animate them. The interface feels familiar to anyone who knows Photoshop.
 Written in Rust (egui + wgpu). macOS is the primary target; Linux is the
 development platform; Windows builds come for free.
 
-> Status: **v0.6.** Enough to map a box, a wall or a few shapes, fill them with
+> Status: **v0.7.** Enough to map a box, a wall or a few shapes, fill them with
 > shaders, images or video, and make them move. See [docs/roadmap.md](docs/roadmap.md)
 > for what comes next.
 
