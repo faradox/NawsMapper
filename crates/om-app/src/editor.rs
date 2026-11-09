@@ -277,7 +277,14 @@ impl Editor {
     }
 
     /// Draws the canvas and handles all pointer interaction on it.
-    pub fn ui(&mut self, ui: &mut Ui, project: &mut Project, output_tex: egui::TextureId) {
+    /// `backdrop` is the venue photo's texture and pixel size, once loaded.
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        project: &mut Project,
+        output_tex: egui::TextureId,
+        backdrop: Option<(egui::TextureId, Vec2)>,
+    ) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.last_rect = rect;
         let painter = ui.painter_at(rect);
@@ -631,6 +638,18 @@ impl Editor {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
             Color32::WHITE,
         );
+        let photo = &project.canvas.backdrop;
+        if let Some((tex, photo_size)) = backdrop.filter(|_| photo.visible && photo.opacity > 0.0) {
+            let (min, max) = photo.fit.place(photo_size, size);
+            let r = Rect::from_min_max(xf.to_screen(min), xf.to_screen(max));
+            let alpha = (photo.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+            painter.with_clip_rect(canvas_rect.intersect(painter.clip_rect())).image(
+                tex,
+                r,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::from_white_alpha(alpha),
+            );
+        }
         painter.rect_stroke(canvas_rect, 0.0, Stroke::new(1.0, Color32::from_gray(90)), StrokeKind::Outside);
 
         let hovered = hover.filter(|p| rect.contains(*p)).and_then(|p| hit_surface(project, xf.to_canvas(p)));

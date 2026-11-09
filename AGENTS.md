@@ -93,7 +93,9 @@ read the source in `~/.cargo/registry/src/*/egui-0.37.0/` rather than going by m
 1. **The output texture is the single source of truth.** The editor preview and the
    projector window both show the same texture. Overlays (outlines, handles) are
    drawn by egui on top and are never part of the projected image unless the user
-   enables "Outlines on projector".
+   enables "Outlines on projector". Blackout (a tint in the output window) and Freeze
+   (a still copy of the texture) are the two deliberate exceptions; the venue photo is
+   editor-only. See architecture.md, "Projector output and Show mode".
 2. **Animation is a pure function of time** (`om_core::anim::evaluate`). No hidden
    per-frame state, so scrubbing, preview and output always agree.
 3. **Undo is snapshot-based.** UI code mutates `doc.project` freely. The app commits

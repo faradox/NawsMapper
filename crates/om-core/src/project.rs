@@ -30,17 +30,74 @@ pub struct Canvas {
     pub width: u32,
     pub height: u32,
     pub background: Color,
+    /// A photo of the venue, shown in the editor only. Never projected.
+    pub backdrop: Backdrop,
 }
 
 impl Default for Canvas {
     fn default() -> Self {
-        Self { width: 1920, height: 1080, background: [0.0, 0.0, 0.0, 1.0] }
+        Self { width: 1920, height: 1080, background: [0.0, 0.0, 0.0, 1.0], backdrop: Backdrop::default() }
     }
 }
 
 impl Canvas {
     pub fn size(&self) -> Vec2 {
         Vec2::new(self.width as f32, self.height as f32)
+    }
+}
+
+/// A reference photo (the building, the stage) to map over while preparing
+/// a show away from the venue. The editor draws it over the surfaces at
+/// `opacity`; the renderer ignores it, so it never reaches the projector.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Backdrop {
+    pub path: Option<PathBuf>,
+    pub opacity: f32,
+    pub visible: bool,
+    pub fit: BackdropFit,
+}
+
+impl Default for Backdrop {
+    fn default() -> Self {
+        Self { path: None, opacity: 0.5, visible: true, fit: BackdropFit::Fit }
+    }
+}
+
+/// How the venue photo is placed on the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BackdropFit {
+    /// Whole photo visible, centered, keeping its proportions.
+    #[default]
+    Fit,
+    /// Covers the canvas, keeping its proportions (edges may be cut off).
+    Fill,
+    /// Stretched to the canvas exactly.
+    Stretch,
+}
+
+impl BackdropFit {
+    pub const ALL: [BackdropFit; 3] = [BackdropFit::Fit, BackdropFit::Fill, BackdropFit::Stretch];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BackdropFit::Fit => "Fit",
+            BackdropFit::Fill => "Fill",
+            BackdropFit::Stretch => "Stretch",
+        }
+    }
+
+    /// Where a `photo`-sized image goes on a `canvas`-sized canvas, as
+    /// (top-left, bottom-right) in canvas pixels.
+    pub fn place(self, photo: Vec2, canvas: Vec2) -> (Vec2, Vec2) {
+        if self == BackdropFit::Stretch || photo.x <= 0.0 || photo.y <= 0.0 {
+            return (Vec2::ZERO, canvas);
+        }
+        let (sx, sy) = (canvas.x / photo.x, canvas.y / photo.y);
+        let scale = if self == BackdropFit::Fit { sx.min(sy) } else { sx.max(sy) };
+        let size = photo * scale;
+        let min = (canvas - size) * 0.5;
+        (min, min + size)
     }
 }
 
@@ -798,15 +855,40 @@ impl Project {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let mut p = Self::from_json(&std::fs::read_to_string(path)?)?;
         if let Some(dir) = path.parent() {
-            for s in &mut p.sources {
-                if let SourceKind::Image { path } | SourceKind::Video { path } = &mut s.kind
-                    && path.is_relative()
-                {
-                    *path = dir.join(&*path);
+            for media in p.media_paths_mut() {
+                if media.is_relative() {
+                    *media = dir.join(&*media);
                 }
             }
         }
         Ok(p)
+    }
+
+    /// Every file the project refers to: image and video sources, then the
+    /// venue photo.
+    pub fn media_paths_mut(&mut self) -> impl Iterator<Item = &mut PathBuf> {
+        let sources = self.sources.iter_mut().filter_map(|s| match &mut s.kind {
+            SourceKind::Image { path } | SourceKind::Video { path } => Some(path),
+            _ => None,
+        });
+        sources.chain(self.canvas.backdrop.path.as_mut())
+    }
+
+    /// Changes the canvas size and scales every surface with it, so the
+    /// picture on the projector stays where it was (the output fills the
+    /// projector whatever the canvas size). Used to make a canvas match the
+    /// projector's native resolution after mapping.
+    pub fn resize_canvas(&mut self, width: u32, height: u32) {
+        let old = self.canvas.size().max(Vec2::ONE);
+        let (width, height) = (width.max(1), height.max(1));
+        let scale = Vec2::new(width as f32, height as f32) / old;
+        for s in &mut self.surfaces {
+            for c in &mut s.corners {
+                *c *= scale;
+            }
+        }
+        self.canvas.width = width;
+        self.canvas.height = height;
     }
 
     /// A ready-to-project scene: three faces of a box (as seen from the
@@ -930,6 +1012,65 @@ mod tests {
         let back = Project::load(&file).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(back.sources[0].kind.media_path(), Some(dir.join("media/clip.mp4").as_path()));
+    }
+
+    #[test]
+    fn load_resolves_relative_backdrop_and_keeps_absolute_paths() {
+        let dir = std::env::temp_dir().join(format!("om-backdrop-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let abs = std::env::temp_dir().join("elsewhere/photo.jpg");
+        let mut p = Project::empty();
+        p.canvas.backdrop.path = Some("Media/venue.jpg".into());
+        p.add_source("img", SourceKind::Image { path: abs.clone() });
+        let file = dir.join("p.omap");
+        p.save(&file).unwrap();
+        let back = Project::load(&file).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(back.canvas.backdrop.path, Some(dir.join("Media/venue.jpg")));
+        assert_eq!(back.sources[0].kind.media_path(), Some(abs.as_path()));
+    }
+
+    #[test]
+    fn old_projects_get_an_empty_backdrop() {
+        let p = Project::from_json(r#"{"canvas":{"width":800,"height":600}}"#).unwrap();
+        assert_eq!(p.canvas.backdrop, Backdrop::default());
+        assert_eq!(p.canvas.width, 800);
+    }
+
+    #[test]
+    fn media_paths_cover_images_videos_and_backdrop() {
+        let mut p = Project::demo();
+        p.add_source("a", SourceKind::Image { path: "a.png".into() });
+        p.add_source("b", SourceKind::Video { path: "b.mp4".into() });
+        p.canvas.backdrop.path = Some("c.jpg".into());
+        let paths: Vec<PathBuf> = p.media_paths_mut().map(|p| p.clone()).collect();
+        assert_eq!(paths, ["a.png", "b.mp4", "c.jpg"].map(PathBuf::from));
+    }
+
+    #[test]
+    fn resize_canvas_keeps_the_projected_picture() {
+        let mut p = Project::empty();
+        p.canvas.width = 1920;
+        p.canvas.height = 1080;
+        p.surfaces.push(Surface::rect(SurfaceId(1), "a", Vec2::new(960.0, 540.0), Vec2::new(192.0, 108.0)));
+        p.resize_canvas(1280, 800);
+        assert_eq!((p.canvas.width, p.canvas.height), (1280, 800));
+        let c = p.surfaces[0].corners;
+        // Same position relative to the canvas: the middle stays the middle.
+        assert!((c[0] - Vec2::new(640.0, 400.0)).length() < 1e-3, "{c:?}");
+        assert!((c[2] - Vec2::new(768.0, 480.0)).length() < 1e-3, "{c:?}");
+    }
+
+    #[test]
+    fn backdrop_fit_modes() {
+        let canvas = Vec2::new(1920.0, 1080.0);
+        let photo = Vec2::new(1000.0, 1000.0);
+        let (min, max) = BackdropFit::Fit.place(photo, canvas);
+        assert_eq!((min, max), (Vec2::new(420.0, 0.0), Vec2::new(1500.0, 1080.0)));
+        let (min, max) = BackdropFit::Fill.place(photo, canvas);
+        assert_eq!((min, max), (Vec2::new(0.0, -420.0), Vec2::new(1920.0, 1500.0)));
+        assert_eq!(BackdropFit::Stretch.place(photo, canvas), (Vec2::ZERO, canvas));
+        assert_eq!(BackdropFit::Fit.place(Vec2::ZERO, canvas), (Vec2::ZERO, canvas));
     }
 
     #[test]

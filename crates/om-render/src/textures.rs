@@ -1,10 +1,12 @@
 //! GPU textures for image and video sources, plus a 1x1 white fallback used
 //! by solid and generator sources (the shader always samples *something*)
-//! and a black one for media that failed to load (no glaring white on the wall).
+//! and a black one for media that is still loading or failed to load (no glaring
+//! white on the wall).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use om_core::{Project, SourceId, SourceKind};
 use om_media::{VideoInfo, VideoPlayer};
@@ -15,10 +17,12 @@ pub type Waker = Arc<dyn Fn() + Send + Sync>;
 struct Entry {
     path: PathBuf,
     is_video: bool,
-    /// `None` when loading failed; the error is kept in `errors`.
+    /// `None` while an image decodes, or when loading failed (the error is kept in `errors`).
     gpu: Option<Gpu>,
     size: (u32, u32),
     video: Option<VideoPlayer>,
+    /// An image being decoded on a background thread.
+    loading: Option<Receiver<Result<image::RgbaImage, String>>>,
 }
 
 struct Gpu {
@@ -98,6 +102,11 @@ impl TextureCache {
         self.entries.get(&id).filter(|e| e.gpu.is_some()).map(|e| e.size)
     }
 
+    /// The image is still being decoded.
+    pub fn loading(&self, id: SourceId) -> bool {
+        self.entries.get(&id).is_some_and(|e| e.loading.is_some())
+    }
+
     pub fn video_info(&self, id: SourceId) -> Option<&VideoInfo> {
         self.entries.get(&id)?.video.as_ref().map(VideoPlayer::info)
     }
@@ -124,29 +133,61 @@ impl TextureCache {
                 let entry = if is_video {
                     self.open_video(device, queue, src.id, path)
                 } else {
-                    self.load_image(device, queue, src.id, path)
+                    self.start_image(device, src.id, path)
                 };
                 self.entries.insert(src.id, entry);
             }
             if is_video {
                 self.update_video(device, queue, src.id, time);
+            } else {
+                self.finish_image(device, queue, src.id);
             }
         }
     }
 
-    fn load_image(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: SourceId, path: &Path) -> Entry {
+    /// Starts decoding an image on a background thread, so a big photo never
+    /// stalls the frame loop (and with it the projector). Until it is ready the
+    /// source shows black, like missing media.
+    fn start_image(&mut self, device: &wgpu::Device, id: SourceId, path: &Path) -> Entry {
+        self.errors.remove(&id);
         let max = device.limits().max_texture_dimension_2d;
-        match load_rgba(path, max) {
+        let (tx, rx) = channel();
+        let waker = self.waker.clone();
+        let file = path.to_path_buf();
+        let spawned = std::thread::Builder::new().name("image decode".into()).spawn(move || {
+            let _ = tx.send(load_rgba(&file, max).map_err(|e| format!("{e:#}")));
+            waker();
+        });
+        let loading = match spawned {
+            Ok(_) => Some(rx),
+            Err(e) => {
+                self.errors.insert(id, format!("could not start decoding: {e}"));
+                None
+            }
+        };
+        Entry { path: path.to_path_buf(), is_video: false, gpu: None, size: (0, 0), video: None, loading }
+    }
+
+    /// Uploads an image once its decoder thread is done.
+    fn finish_image(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: SourceId) {
+        let Self { entries, errors, layout, sampler, .. } = self;
+        let Some(entry) = entries.get_mut(&id) else { return };
+        let Some(rx) = &entry.loading else { return };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("the image decoder stopped".into()),
+        };
+        entry.loading = None;
+        match result {
             Ok(img) => {
-                self.errors.remove(&id);
                 let (w, h) = img.dimensions();
-                let gpu = upload(device, queue, &self.layout, &self.sampler, w, h, &img, "om image");
-                Entry { path: path.to_path_buf(), is_video: false, gpu: Some(gpu), size: (w, h), video: None }
+                entry.gpu = Some(upload(device, queue, layout, sampler, w, h, &img, "om image"));
+                entry.size = (w, h);
             }
             Err(e) => {
-                log::warn!("failed to load image {}: {e:#}", path.display());
-                self.errors.insert(id, format!("{e:#}"));
-                Entry { path: path.to_path_buf(), is_video: false, gpu: None, size: (0, 0), video: None }
+                log::warn!("failed to load image {}: {e}", entry.path.display());
+                errors.insert(id, e);
             }
         }
     }
@@ -166,12 +207,20 @@ impl TextureCache {
                     gpu: Some(gpu),
                     size: (w, h),
                     video: Some(player),
+                    loading: None,
                 }
             }
             Err(e) => {
                 log::warn!("failed to open video {}: {e:#}", path.display());
                 self.errors.insert(id, format!("{e:#}"));
-                Entry { path: path.to_path_buf(), is_video: true, gpu: None, size: (0, 0), video: None }
+                Entry {
+                    path: path.to_path_buf(),
+                    is_video: true,
+                    gpu: None,
+                    size: (0, 0),
+                    video: None,
+                    loading: None,
+                }
             }
         }
     }

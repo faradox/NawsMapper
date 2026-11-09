@@ -79,12 +79,21 @@ updated with every change. Previous versions are under
 - Opacity, tint, feathered edges and all 24 **Photoshop blend modes** (Multiply, Screen,
   Overlay, Soft Light, Color Dodge, Difference, Hue, Color, Luminosity…), applied
   against everything below the surface. `Shift +` / `Shift -` cycles them.
-- **Projector output window**: drag it to the projector and press `F` for full screen.
-  Optional outlines on the projector help with aligning corners on the real object, and
-  **Show Mouse on Projector** draws the pointer on the projection while you point at the
-  canvas, so you can trace the real object while looking at it.
+- **Projector output**: pick the projector from a list and the output goes full screen
+  there (remembered for next time). A warning and one click when the canvas isn't the
+  projector's resolution, so the picture is pixel-exact. Optional outlines on the
+  projector help with aligning corners on the real object, and **Show Mouse on
+  Projector** draws the pointer on the projection while you point at the canvas.
+- **Show mode** (`Cmd+Shift+Enter`): editing locked, nothing but the picture on the
+  projector, stray keys ignored, quitting asks first. **Blackout** with an adjustable
+  fade (`B`) and **Freeze** (`F`): hold the picture while you fix something.
+- **Prepare at home**: map over a **venue photo** (shown in the editor only), **export a
+  mapping template** (PNG or SVG with every surface's outline, number and name) to
+  design content that fits, and **Package Project** into a folder with copies of all
+  its media for the show computer.
 - Undo/redo, save/open (`.omap`, JSON), reopens the last project on launch
-  (or the one given on the command line: `nawsmapper show.omap`).
+  (or the one given on the command line: `nawsmapper show.omap`). Unsaved work is kept
+  aside every 30 s and offered back after a crash.
 
 ## Quick start
 
@@ -125,6 +134,8 @@ macOS bundles (built by GitHub Actions) and Windows, and
 | `Cmd+0`, `Cmd+1`, `Cmd+=`/`-` | Fit, 100 %, zoom in/out (or pinch / Cmd+scroll) |
 | `Cmd+Enter` | Toggle projector output window |
 | `F`, double-click, `Esc` | (in output window) full screen on / toggle / off |
+| `Cmd+Shift+Enter` | Show mode on / off |
+| `B` / `F` | (in Show mode) Blackout / Freeze |
 
 `Cmd` is `Ctrl` on Linux and Windows.
 
@@ -147,6 +158,7 @@ scripts/      macOS bundling, release publishing and release notes
 - [docs/architecture.md](docs/architecture.md): how the pieces fit
 - [docs/user-guide.md](docs/user-guide.md): first projection, step by step
 - [docs/roadmap.md](docs/roadmap.md): where we're going
+- [docs/pro-features.md](docs/pro-features.md): what professional mappers expect, prioritized
 - [docs/platforms.md](docs/platforms.md): macOS / Windows / Linux builds
 - [docs/releasing.md](docs/releasing.md): download links, cutting a release
 - [docs/feedback-log.md](docs/feedback-log.md): user feedback and the decisions it drove

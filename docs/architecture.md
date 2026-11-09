@@ -26,14 +26,18 @@
 
 ## Frame loop (`NawsMapperApp::ui`)
 
-1. Advance the transport clock (if playing).
-2. Read shortcuts and dropped files → queue `Action`s.
+1. Advance the transport clock (if playing), refresh the display list (about once a
+   second) and step the Blackout fade.
+2. Read shortcuts and dropped files → queue `Action`s. Poll finished file dialogs,
+   packaging and the venue photo loader.
 3. `Renderer::render(project, time)`: one render pass into the output texture.
-4. Lay out the panels and canvas. UI code edits `doc.project` directly.
+4. Lay out the panels and canvas (or, in Show mode, the show view). UI code edits
+   `doc.project` directly.
 5. Show the projector viewport (an immediate egui viewport, i.e. a second OS window).
 6. Run queued actions.
 7. If no pointer button is down, `commit_if_changed()` records an undo snapshot.
-8. Update window title, handle close (asks to save), request repaint while playing.
+8. Autosave for crash recovery, update window title, handle close (asks to save; in
+   Show mode asks first whether to quit at all), request repaint while playing.
 
 Rendering happens before the UI is drawn, so the preview is at most one frame
 behind an edit. That's invisible in practice and keeps the loop simple.
@@ -101,8 +105,10 @@ surface, padded to the device's offset alignment).
 builds a throwaway project with one 192×120 tile per preset and draws it into a
 separate atlas texture, only while the library window is open.
 
-Image sources are decoded with the `image` crate on the UI thread when first seen
-or when their path changes.
+Image sources are decoded with the `image` crate on a background thread when first
+seen or when their path changes (`TextureCache::start_image`); the finished pixels
+are uploaded on the next frame. Until then the source is black, so importing a big
+photo never stalls the frame loop, and with it the projector.
 
 **Cutouts** (`Surface::cutout`) are drawn like a solid surface whose color is the
 canvas background, with normal blending. The mask, feather and opacity give the hole
@@ -126,6 +132,52 @@ order decides what a cutout cuts.
 
 Video time is the global transport time, so a source shared by several surfaces
 shows the same frame on all of them (per-surface time offset doesn't apply to video).
+
+## Projector output and Show mode
+
+`output.rs` owns the projector window. The **projector picker** lists winit's
+monitors (`eframe::Frame::winit_window().available_monitors()`, see `displays.rs`) and
+sends the viewport borderless full screen to the chosen one with
+`ViewportCommand::SetMonitor(index)`. The choice is remembered by display name (plus
+which of several same-named displays), resolved to an index again whenever the list
+changes, and stored in eframe's app state, not in the project. The wgpu backend ignores
+`ViewportBuilder::with_monitor` for child windows, which is why we send the command.
+
+The output always fills the projector. When the canvas and the projector differ in
+size, the UI says so and **Match Canvas to Projector** calls
+`Project::resize_canvas`, which scales the surface corners with the canvas, so the
+picture on the wall stays put and becomes pixel-exact.
+
+Two deliberate exceptions to "the output texture is the single source of truth":
+
+- **Blackout** multiplies the image in the output window by a fading gray tint
+  (`OutputWindow::level`). The texture, and therefore the editor preview, keeps the
+  content; the editor shows a banner instead.
+- **Freeze** copies the output texture once (`Renderer::freeze`) and the projector
+  shows that copy while the editor keeps rendering live. Overlays (outlines, mouse)
+  are off on the projector while frozen, or the audience would see the edits.
+
+**Show mode** replaces the editor with `panels/show.rs` (preview of what the projector
+shows, clock, Blackout, Freeze). `handle_shortcuts` drops every key except the
+Show-mode shortcuts, the output window ignores Esc/F/double-click and close requests,
+and quitting asks first (`Prompt::QuitShow`). Entering Show mode sends the output back
+to the chosen projector.
+
+## Recovery and prep tools
+
+- **Autosave** (`recovery.rs`): while the document is dirty, the project and its path
+  are written to `recovery.json` in eframe's storage folder every 30 s, through one
+  worker thread so writes and removals stay in order. Saving, a clean quit, or
+  replacing the document removes it; finding it at startup means a crash, and
+  `Prompt::Recover` offers to restore it (as an unsaved document).
+- **Venue photo** (`Canvas::backdrop`, `backdrop.rs`): an egui texture drawn by the
+  editor over the output texture at its opacity, below the overlays. The renderer
+  never sees it.
+- **Mapping template** (`template.rs`): PNG rasterized on the CPU with tiny-skia, text
+  as ab_glyph outlines of egui's bundled Ubuntu font; SVG written as text with one
+  named group per surface.
+- **Package Project** (`package.rs`): `plan` is a pure function (unique file names,
+  relative `Media/…` paths, missing files); `execute` copies on a thread.
 
 ## File dialogs
 
@@ -172,14 +224,15 @@ Operations that need different values per surface (e.g. **Stagger**) are explici
 ## Persistence
 
 - Project files: pretty JSON, extension `.omap`, `format_version` field. Relative
-  image paths are resolved against the project file's folder on load.
-- App state (window size, last opened project): eframe persistence
-  (folder named after the app ID, `~/Library/Application Support/net.nawsmapper.NawsMapper`
-  on macOS).
+  media paths (images, videos, venue photo: `Project::media_paths_mut`) are resolved
+  against the project file's folder on load.
+- App state (window size, last opened project, projector choice, Blackout fade time)
+  and the recovery file: eframe's storage folder (named after the app ID,
+  `~/Library/Application Support/net.nawsmapper.NawsMapper` on macOS).
 
-## Known limitations (v0.3)
+## Known limitations
 
-- Output window placement is manual (drag to projector, then `F`). No monitor picker yet.
+- One output. No edge blending or per-output color yet.
 - Video is H.264 only (no HEVC/ProRes/HAP yet), no audio, CPU decoding.
   No live camera, Syphon/Spout/NDI yet.
 - No mesh warp. Free-form shapes have at most 64 points and no Bézier handles

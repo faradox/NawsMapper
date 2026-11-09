@@ -95,6 +95,8 @@ pub struct Renderer {
     textures: TextureCache,
     output: OutputTarget,
     output_generation: u64,
+    /// A still copy of the output that the projector shows while frozen.
+    frozen: Option<OutputTarget>,
     /// Live previews of generators (shader library), one tile each.
     thumbnails: Option<OutputTarget>,
     thumbnail_generation: u64,
@@ -183,6 +185,7 @@ impl Renderer {
             textures,
             output,
             output_generation: 0,
+            frozen: None,
             thumbnails: None,
             thumbnail_generation: 0,
         }
@@ -196,6 +199,39 @@ impl Renderer {
     /// so callers know to re-register it with their UI toolkit.
     pub fn output_generation(&self) -> u64 {
         self.output_generation
+    }
+
+    /// Copies the current output into a still frame and returns it. The
+    /// projector shows that copy while the editor keeps rendering live, so
+    /// edits stay invisible until [`Renderer::unfreeze`].
+    pub fn freeze(&mut self) -> &OutputTarget {
+        let (w, h) = (self.output.width, self.output.height);
+        if self.frozen.as_ref().is_none_or(|f| (f.width, f.height) != (w, h)) {
+            self.frozen = Some(create_output(&self.device, w, h));
+        }
+        let frozen = self.frozen.as_ref().expect("created above");
+        let mut encoder =
+            self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("om freeze") });
+        encoder.copy_texture_to_texture(
+            self.output.texture.as_image_copy(),
+            frozen.texture.as_image_copy(),
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([encoder.finish()]);
+        frozen
+    }
+
+    pub fn unfreeze(&mut self) {
+        self.frozen = None;
+    }
+
+    pub fn frozen(&self) -> Option<&OutputTarget> {
+        self.frozen.as_ref()
+    }
+
+    /// The image source is still being decoded.
+    pub fn source_loading(&self, id: SourceId) -> bool {
+        self.textures.loading(id)
     }
 
     /// Error message for a source that failed to load, if any.
@@ -690,7 +726,8 @@ fn create_output(device: &wgpu::Device, width: u32, height: u32) -> OutputTarget
         format: OUTPUT_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

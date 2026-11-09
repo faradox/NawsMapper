@@ -22,6 +22,12 @@ impl Document {
         Self { committed: project.clone(), project, history: History::default(), path, dirty: false }
     }
 
+    /// A document restored after a crash: it belongs to `path` but has
+    /// changes that were never saved there.
+    pub fn restored(project: Project, path: Option<PathBuf>) -> Self {
+        Self { dirty: true, ..Self::new(project, path) }
+    }
+
     /// Records an undo step if the project changed since the last commit.
     /// Call once per frame while no pointer interaction is in progress so
     /// drags and slider moves become a single step.

@@ -41,6 +41,21 @@ pub fn menu_bar(ui: &mut Ui, app: &mut NawsMapperApp) {
                     app.act(Action::ImportMedia);
                 }
                 ui.separator();
+                if item(ui, "Export Mapping Template…", None, true) {
+                    app.act(Action::ExportTemplate);
+                }
+                ui.label(
+                    RichText::new("   Outlines and names as PNG or SVG, for designing content")
+                        .weak()
+                        .small(),
+                );
+                if item(ui, "Package Project…", None, app.package_progress().is_none()) {
+                    app.act(Action::PackageProject);
+                }
+                ui.label(
+                    RichText::new("   A folder with the project and copies of all its media").weak().small(),
+                );
+                ui.separator();
                 if item(ui, "Quit", None, true) {
                     app.act(Action::Quit);
                 }
@@ -133,6 +148,12 @@ pub fn menu_bar(ui: &mut Ui, app: &mut NawsMapperApp) {
                 ui.separator();
                 ui.checkbox(&mut app.editor.show_outlines, "Show Outlines in Editor");
                 ui.checkbox(&mut app.editor.snapping, "Snap to Corners");
+                let backdrop = &mut app.doc.project.canvas.backdrop;
+                if backdrop.path.is_some() {
+                    ui.checkbox(&mut backdrop.visible, "Show Venue Photo");
+                } else if item(ui, "Venue Photo…", None, true) {
+                    app.act(Action::ChooseBackdrop);
+                }
                 ui.separator();
                 if item(ui, "Shader Library", Some(&shortcuts::LIBRARY), true) {
                     app.act(Action::ToggleLibrary);
@@ -143,11 +164,46 @@ pub fn menu_bar(ui: &mut Ui, app: &mut NawsMapperApp) {
                 if item(ui, label, Some(&shortcuts::OUTPUT), true) {
                     app.act(Action::ToggleOutput);
                 }
+                ui.menu_button("Projector", |ui| display_menu(ui, app));
+                if let Some((w, h)) = app.output.size_mismatch(&app.doc.project) {
+                    let c = &app.doc.project.canvas;
+                    ui.colored_label(
+                        theme::WARN,
+                        format!("⚠ Canvas {}×{}, projector {w}×{h}", c.width, c.height),
+                    );
+                    if item(ui, &format!("Match Canvas to Projector ({w}×{h})"), None, true) {
+                        app.act(Action::MatchCanvasToProjector);
+                    }
+                }
+                ui.separator();
                 ui.checkbox(&mut app.output.show_outlines, "Show Outlines on Projector");
                 ui.checkbox(&mut app.output.show_cursor, "Show Mouse on Projector").on_hover_text(
                     "Draw the mouse pointer on the projected image while it is over the canvas, \
                      so you can trace the real object while looking at it",
                 );
+                ui.separator();
+                let black = if app.output.blackout { "Lights On" } else { "Blackout" };
+                if item(ui, black, None, app.output.open) {
+                    app.act(Action::ToggleBlackout);
+                }
+                ui.horizontal(|ui| {
+                    ui.label("   Fade");
+                    ui.add(
+                        egui::DragValue::new(&mut app.output.fade_secs)
+                            .range(0.0..=10.0)
+                            .speed(0.05)
+                            .suffix(" s"),
+                    );
+                });
+                let freeze = if app.frozen() { "Unfreeze Projector" } else { "Freeze Projector" };
+                if item(ui, freeze, None, app.output.open) {
+                    app.act(Action::ToggleFreeze);
+                }
+                ui.separator();
+                if item(ui, "Show Mode", Some(&shortcuts::SHOW_MODE), true) {
+                    app.act(Action::ToggleShowMode);
+                }
+                ui.label(RichText::new("   Locks editing for the performance").weak().small());
             });
             ui.menu_button("Help", |ui| {
                 ui.label(RichText::new("NawsMapper").strong());
@@ -270,10 +326,56 @@ pub fn toolbar(ui: &mut Ui, app: &mut NawsMapperApp) {
             {
                 app.act(Action::ToggleOutput);
             }
+            let target = match (app.output.projector(), &app.output.display) {
+                (Some(p), _) => p.name.clone(),
+                (None, Some(choice)) => format!("⚠ {} (not connected)", choice.label()),
+                (None, None) => "Window".into(),
+            };
+            ui.menu_button(format!("{target} ⏷"), |ui| display_menu(ui, app))
+                .response
+                .on_hover_text("Which display the output goes full screen on");
+            if app.output.size_mismatch(&app.doc.project).is_some() {
+                let c = &app.doc.project.canvas;
+                if ui
+                    .add(Button::new(RichText::new("⚠ Size").color(theme::WARN)))
+                    .on_hover_text(format!(
+                        "The canvas ({}×{}) is not the projector's size, so the output is scaled. \
+                         Click to match the canvas to the projector (surfaces are scaled along).",
+                        c.width, c.height
+                    ))
+                    .clicked()
+                {
+                    app.act(Action::MatchCanvasToProjector);
+                }
+            }
             if app.output.open {
                 ui.checkbox(&mut app.output.show_outlines, "Outlines on projector");
                 ui.checkbox(&mut app.output.show_cursor, "Mouse on projector")
                     .on_hover_text("Show the mouse pointer on the projector while it is over the canvas");
+                if ui
+                    .add(super::show::live_button("■", app.output.blackout))
+                    .on_hover_text("Blackout: fade the projector to black and back")
+                    .clicked()
+                {
+                    app.act(Action::ToggleBlackout);
+                }
+                if ui
+                    .add(super::show::live_button("❄", app.frozen()))
+                    .on_hover_text("Freeze: the projector holds this frame while you keep editing")
+                    .clicked()
+                {
+                    app.act(Action::ToggleFreeze);
+                }
+            }
+            if ui
+                .add(Button::new(RichText::new("● Show").color(theme::LIVE)))
+                .on_hover_text(format!(
+                    "Show mode: lock editing for the performance ({})",
+                    ui.ctx().format_shortcut(&shortcuts::SHOW_MODE)
+                ))
+                .clicked()
+            {
+                app.act(Action::ToggleShowMode);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -308,12 +410,45 @@ pub fn status_bar(ui: &mut Ui, app: &mut NawsMapperApp) {
             ));
             ui.separator();
             ui.label(format!("{:.0} fps", app.fps()));
+            if let Some((done, total)) = app.package_progress() {
+                ui.separator();
+                ui.spinner();
+                ui.label(format!("Packaging: {done} of {total} files"));
+            }
             if let Some(msg) = app.status() {
                 ui.separator();
                 ui.label(RichText::new(msg).color(theme::ACCENT_SOFT));
             }
         });
     });
+}
+
+/// Output → Projector: a window, or full screen on one of the connected displays.
+fn display_menu(ui: &mut Ui, app: &mut NawsMapperApp) {
+    let current = app.output.display.as_ref().and_then(|c| c.resolve(&app.output.displays));
+    if ui.radio(app.output.display.is_none(), "Window (move it yourself, F for full screen)").clicked() {
+        app.act(Action::ChooseDisplay(None));
+        ui.close();
+    }
+    ui.separator();
+    let names: Vec<String> = app.output.displays.iter().map(|d| d.describe()).collect();
+    for (i, name) in names.into_iter().enumerate() {
+        if ui.radio(current == Some(i), name).clicked() {
+            app.act(Action::ChooseDisplay(Some(i)));
+            ui.close();
+        }
+    }
+    if let Some(choice) = app.output.display.as_ref().filter(|_| current.is_none()) {
+        ui.colored_label(theme::WARN, format!("⚠ {} is not connected", choice.label()));
+    }
+    if app.output.displays.len() < 2 {
+        ui.label(
+            RichText::new(
+                "Connect the projector and set it to extend the desktop;\nit shows up here within a second.",
+            )
+            .weak(),
+        );
+    }
 }
 
 /// Outline drawing of a shape (`path` for free-form ones), fitted into a

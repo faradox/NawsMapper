@@ -52,12 +52,20 @@ development build; bumping the version publishes a numbered release. Permanent d
 links, install help on every release page, build number in Help. Tracker:
 [trackers/0008-releases.md](trackers/0008-releases.md).
 
+## ✅ Show-ready output and prep kit (done, P1-1 + P1-2)
+
+Projector picker (remembered), Match Canvas to Projector, Show mode, Blackout with
+fade, Freeze, images decoded off the UI thread, autosave and crash recovery; venue
+photo, mapping template export (PNG/SVG), Package Project. Tracker:
+[trackers/0009-show-ready-prep-kit.md](trackers/0009-show-ready-prep-kit.md).
+
 ## Next candidates (pick from feedback)
 
+What professional mappers expect, compared with MadMapper, Resolume, Millumin and
+HeavyM, with a prioritized list: [pro-features.md](pro-features.md).
+
 ### Output & show workflow
-- Monitor picker: send output to a chosen display in one click, remember it per project.
 - Multiple outputs (two projectors), with edge blending later.
-- "Show mode": hide the editor overlays and lock everything.
 - Syphon (macOS) / Spout (Windows) / NDI output and input.
 
 ### Media

@@ -31,14 +31,21 @@ pub enum Then {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Purpose {
     Open,
-    SaveAs { then: Option<Then> },
+    SaveAs {
+        then: Option<Then>,
+    },
     ImportMedia,
     ReplaceMedia(SourceId),
+    ExportTemplate,
+    /// Pick the folder to create the package in.
+    Package,
+    ChooseBackdrop,
 }
 
 pub enum Kind {
     PickFile,
     PickFiles,
+    PickFolder,
     SaveFile,
 }
 
@@ -70,6 +77,10 @@ impl FileDialogs {
             }
             Kind::SaveFile => {
                 let f = dialog.save_file();
+                Box::pin(async move { one(f.await) })
+            }
+            Kind::PickFolder => {
+                let f = dialog.pick_folder();
                 Box::pin(async move { one(f.await) })
             }
             Kind::PickFiles => {
@@ -106,8 +117,22 @@ impl FileDialogs {
 /// An in-app modal question or message.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prompt {
-    Unsaved { name: String, then: Then },
-    Error { title: String, message: String },
+    Unsaved {
+        name: String,
+        then: Then,
+    },
+    /// An error or a notice, with an OK button.
+    Message {
+        title: String,
+        message: String,
+    },
+    /// Quitting in Show mode turns the projector dark: ask first.
+    QuitShow,
+    /// The last session left unsaved changes behind (a crash).
+    Recover {
+        name: String,
+        age: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -115,6 +140,9 @@ pub enum PromptAnswer {
     Save(Then),
     Discard(Then),
     Dismiss,
+    QuitShow,
+    Restore,
+    DropRecovery,
 }
 
 /// Shows `prompt` as a modal; returns the answer once the user picks one.
@@ -127,7 +155,7 @@ pub fn show_prompt(ctx: &egui::Context, prompt: &Prompt) -> Option<PromptAnswer>
         )
     });
     let modal = egui::Modal::new(egui::Id::unique("prompt")).show(ctx, |ui| {
-        ui.set_width(360.0);
+        ui.set_width(380.0);
         match prompt {
             Prompt::Unsaved { name, then } => {
                 ui.heading("Unsaved changes");
@@ -148,7 +176,7 @@ pub fn show_prompt(ctx: &egui::Context, prompt: &Prompt) -> Option<PromptAnswer>
                     });
                 });
             }
-            Prompt::Error { title, message } => {
+            Prompt::Message { title, message } => {
                 ui.heading(title);
                 ui.add_space(4.0);
                 ui.label(message);
@@ -159,9 +187,46 @@ pub fn show_prompt(ctx: &egui::Context, prompt: &Prompt) -> Option<PromptAnswer>
                     }
                 });
             }
+            Prompt::QuitShow => {
+                ui.heading("Quit during the show?");
+                ui.add_space(4.0);
+                ui.label("Show mode is on. When NawsMapper quits, the projector goes dark.");
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Quit").clicked() {
+                        answer = Some(PromptAnswer::QuitShow);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(egui::RichText::new("Keep Running").strong()).clicked() || enter {
+                            answer = Some(PromptAnswer::Dismiss);
+                        }
+                    });
+                });
+            }
+            Prompt::Recover { name, age } => {
+                ui.heading("Restore unsaved work?");
+                ui.add_space(4.0);
+                ui.label(format!(
+                    "NawsMapper didn't close properly last time. Unsaved changes to \"{name}\" \
+                     from {age} can be restored."
+                ));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Discard Them").clicked() {
+                        answer = Some(PromptAnswer::DropRecovery);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(egui::RichText::new("Restore").strong()).clicked() || enter {
+                            answer = Some(PromptAnswer::Restore);
+                        }
+                    });
+                });
+            }
         }
     });
-    if escape || modal.should_close() {
+    // Recovery needs an explicit choice: carrying on would overwrite it.
+    let dismissable = !matches!(prompt, Prompt::Recover { .. });
+    if dismissable && (escape || modal.should_close()) {
         answer.get_or_insert(PromptAnswer::Dismiss);
     }
     answer

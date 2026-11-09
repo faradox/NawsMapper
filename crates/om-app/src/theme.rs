@@ -11,6 +11,8 @@ pub const OUTLINE: Color32 = Color32::from_rgba_premultiplied(150, 150, 150, 150
 pub const WARN: Color32 = Color32::from_rgb(240, 170, 60);
 /// Outline of cutout surfaces.
 pub const CUTOUT: Color32 = Color32::from_rgb(235, 110, 150);
+/// Show mode, blackout and freeze: things the audience sees.
+pub const LIVE: Color32 = Color32::from_rgb(235, 70, 70);
 
 pub fn apply(ctx: &egui::Context) {
     let mut v = Visuals::dark();

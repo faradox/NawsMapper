@@ -35,15 +35,25 @@ three clicks it takes. **Help** in the menu bar shows which version you have.
 
 Click empty space so nothing is selected. Properties then shows the **Canvas**.
 Set the size to your projector's native resolution (often 1920×1080; see the
-**Preset** menu).
+**Preset** menu). Once the projector is connected, NawsMapper can do this for you
+(step 2).
 
 ## 2. Connect the projector
 
 1. Connect the projector and set macOS to **extend** the display (not mirror):
    System Settings → Displays.
-2. In NawsMapper: **Output → Open Output Window** (`Cmd+Enter`).
-3. Drag that window onto the projector's screen and press **`F`** (or
-   double-click it). It goes full screen. `Esc` leaves full screen.
+2. In NawsMapper: **Output → Projector** (or the **Window ▾** button in the toolbar)
+   and pick the projector from the list. The output goes full screen on it.
+   NawsMapper remembers it: next time the output goes there as soon as that projector
+   is connected.
+3. If the toolbar shows **⚠ Size**, the canvas isn't the projector's resolution, so
+   the picture is scaled and fine lines get soft. Click it (or **Output → Match Canvas
+   to Projector**): the canvas takes the projector's size and your surfaces are scaled
+   along, so nothing moves on the wall.
+
+You can still use the output as a normal window instead: choose **Window** in the
+list, drag it where you like, and press **`F`** (or double-click it) for full screen.
+`Esc` leaves full screen.
 
 With **Outlines on projector** on, the projector also shows thin outlines of all
 surfaces and the corners of the selected ones. That's very helpful while aligning.
@@ -199,8 +209,46 @@ plant in front of the screen, the gap between two objects.
 `Cmd+S` saves an `.omap` project; `Cmd+Shift+S` saves under a new name.
 NawsMapper reopens your last project on launch. When you are about to lose
 unsaved changes (New, Open, Quit), it asks first.
-Keep images and videos next to the project file if you want to move the project
-to another computer.
+
+If NawsMapper ever closes unexpectedly, your unsaved work isn't lost: changes are kept
+aside every 30 seconds, and the next start offers to **Restore** them.
+
+## 11. Prepare at home
+
+You don't need to be at the venue to start mapping.
+
+- **Venue photo.** Take a photo of the building or stage, ideally from where the
+  projector will stand. Click empty canvas, then **Properties → Venue Photo → Choose
+  Photo…**. It appears over your surfaces at half strength (change it with
+  **Opacity**), so you can draw surfaces over the windows and doors in the photo. It is
+  only shown in NawsMapper, never on the projector. **View → Show Venue Photo** hides
+  it.
+- **Mapping template.** **File → Export Mapping Template…** saves a picture of all
+  your surfaces at canvas size: outlines, numbers and names, on a transparent
+  background. Put it on top of your artwork in Photoshop or After Effects as a guide
+  layer and design the content to fit exactly. Choose `.svg` instead of `.png` for
+  Illustrator or Affinity, with one layer per surface.
+- **Package Project.** Before moving to the show computer: **File → Package
+  Project…** and pick a folder (a USB stick, say). NawsMapper creates a folder with the
+  project and a copy of every image, video and the venue photo in it. Open the project
+  from there on the other computer. If a file couldn't be found, it tells you which.
+
+## 12. The show
+
+When everything is aligned, press **`Cmd+Shift+Enter`** (or **● Show** in the
+toolbar) for **Show mode**. The window turns into a small control screen: what the
+audience sees, the clock, and two buttons. Editing is locked, the outlines and the
+mouse disappear from the projector, and stray keys do nothing, so nothing on the wall
+changes by accident. Quitting asks first.
+
+- **Blackout** (`B`): the projector fades to black, and back when you press it again.
+  **Fade** sets how long that takes (0 cuts immediately).
+- **Freeze** (`F`): the projector holds the current picture. Handy for fixing
+  something during a break: freeze, leave Show mode, make the change (the editor
+  shows it, the wall doesn't), go back into Show mode and unfreeze.
+
+`Cmd+Shift+Enter` again leaves Show mode. Blackout and Freeze are also in the
+**Output** menu and the toolbar outside Show mode.
 
 ## Shortcut cheat sheet
 

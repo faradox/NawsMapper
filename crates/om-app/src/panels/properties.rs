@@ -8,11 +8,12 @@ use egui::{RichText, Slider, SliderClamping, Ui};
 use glam::Vec2;
 use om_core::anim::{Lfo, Wave};
 use om_core::{
-    BlendMode, Border, BorderEffect, BorderPosition, BorderStyle, Mapping, Mask, Palette, Project, Surface,
-    SurfaceId, diff::propagate_changes,
+    BackdropFit, BlendMode, Border, BorderEffect, BorderPosition, BorderStyle, Mapping, Mask, Palette,
+    Project, Surface, SurfaceId, diff::propagate_changes,
 };
 
 use crate::app::{Action, NawsMapperApp};
+use crate::theme;
 use crate::widgets::{color_edit, combo, fit_slider, grid, prop_label, section, vec2_drag};
 
 pub fn properties_panel(ui: &mut Ui, app: &mut NawsMapperApp) {
@@ -28,7 +29,7 @@ pub fn properties_panel(ui: &mut Ui, app: &mut NawsMapperApp) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut content, |ui| {
             let sel: Vec<SurfaceId> = app.editor.selection.surfaces.clone();
             match app.editor.selection.primary().and_then(|id| app.doc.project.surface(id)).cloned() {
-                None => canvas_props(ui, &mut app.doc.project),
+                None => canvas_props(ui, app),
                 Some(before) => {
                     let mut after = before.clone();
                     surface_props(ui, app, &mut after, sel.len());
@@ -51,7 +52,13 @@ fn apply_to_selection(project: &mut Project, sel: &[SurfaceId], before: &Surface
     }
 }
 
-fn canvas_props(ui: &mut Ui, project: &mut Project) {
+fn canvas_props(ui: &mut Ui, app: &mut NawsMapperApp) {
+    let mismatch = app.output.size_mismatch(&app.doc.project);
+    let projector = app.output.projector().map(|p| p.name.clone()).unwrap_or_default();
+    let photo_loading = app.backdrop.is_loading();
+    let photo_error = app.backdrop.error.clone();
+    let project = &mut app.doc.project;
+    let mut actions = Vec::new();
     ui.label(RichText::new("Nothing selected — showing the canvas.").weak());
     ui.add_space(6.0);
     section(ui, "Canvas", |ui| {
@@ -87,7 +94,90 @@ fn canvas_props(ui: &mut Ui, project: &mut Project) {
             color_edit(ui, &mut project.canvas.background);
             ui.end_row();
         });
+        if let Some((w, h)) = mismatch {
+            ui.add_space(4.0);
+            ui.colored_label(
+                theme::WARN,
+                format!("⚠ {projector} is {w}×{h}. The output is scaled, so lines aren't pixel-sharp."),
+            );
+            if ui
+                .button(format!("Match Canvas to Projector ({w}×{h})"))
+                .on_hover_text("Resizes the canvas and scales the surfaces, so the projection stays in place")
+                .clicked()
+            {
+                actions.push(Action::MatchCanvasToProjector);
+            }
+        }
     });
+    section(ui, "Venue Photo", |ui| {
+        let backdrop = &mut project.canvas.backdrop;
+        ui.label(
+            RichText::new(
+                "A photo of the building or stage to map over while preparing. \
+                 Shown here only, never on the projector.",
+            )
+            .weak(),
+        );
+        ui.add_space(4.0);
+        match backdrop.path.clone() {
+            None => {
+                if ui.button("Choose Photo…").clicked() {
+                    actions.push(Action::ChooseBackdrop);
+                }
+            }
+            Some(path) => {
+                grid(ui, "backdrop_props", |ui| {
+                    prop_label(ui, "File", "");
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    ui.label(name).on_hover_text(path.display().to_string());
+                    ui.end_row();
+                    prop_label(ui, "", "");
+                    ui.horizontal(|ui| {
+                        if ui.button("Replace…").clicked() {
+                            actions.push(Action::ChooseBackdrop);
+                        }
+                        if ui.button("Remove").clicked() {
+                            actions.push(Action::RemoveBackdrop);
+                        }
+                    });
+                    ui.end_row();
+                    prop_label(ui, "Show", "View → Show Venue Photo");
+                    ui.checkbox(&mut backdrop.visible, "");
+                    ui.end_row();
+                    prop_label(ui, "Opacity", "How strongly the photo shows over the surfaces");
+                    fit_slider(
+                        ui,
+                        Slider::new(&mut backdrop.opacity, 0.0..=1.0)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    );
+                    ui.end_row();
+                    prop_label(
+                        ui,
+                        "Fit",
+                        "Fit: whole photo. Fill: covers the canvas. Stretch: exactly the canvas.",
+                    );
+                    combo(ui, "backdrop_fit", backdrop.fit.label()).show_ui(ui, |ui| {
+                        for f in BackdropFit::ALL {
+                            ui.selectable_value(&mut backdrop.fit, f, f.label());
+                        }
+                    });
+                    ui.end_row();
+                });
+                if photo_loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading…");
+                    });
+                }
+                if let Some(err) = &photo_error {
+                    ui.colored_label(theme::WARN, format!("⚠ {err}"));
+                }
+            }
+        }
+    });
+    for a in actions {
+        app.act(a);
+    }
     ui.add_space(10.0);
     ui.label(RichText::new("Tip: click a surface on the canvas or in Layers to edit it. Shift-click to edit several at once.").weak());
 }

@@ -9,14 +9,21 @@ use glam::Vec2;
 use om_core::{FILE_EXTENSION, Generator, Mask, Project, SourceId, SourceKind};
 use om_render::{Renderer, VIDEO_EXTENSIONS};
 
+use crate::backdrop::BackdropImage;
 use crate::dialogs::{self, FileDialogs, Kind, Prompt, PromptAnswer, Purpose, Then};
+use crate::displays::DisplayChoice;
 use crate::document::Document;
 use crate::editor::Editor;
-use crate::output::OutputWindow;
+use crate::output::{OutputFrame, OutputWindow};
 use crate::panels::{self, Library};
+use crate::recovery::{self, Autosave, Recovered};
 
+/// Identifies the app to the OS (window grouping, settings folder).
+pub const APP_ID: &str = "net.nawsmapper.NawsMapper";
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tga"];
 const LAST_PROJECT_KEY: &str = "last_project";
+const DISPLAY_KEY: &str = "output_display";
+const FADE_KEY: &str = "blackout_fade";
 
 pub mod shortcuts {
     use super::*;
@@ -40,6 +47,10 @@ pub mod shortcuts {
     pub const ZOOM_IN: KeyboardShortcut = KeyboardShortcut::new(CMD, Key::Equals);
     pub const ZOOM_OUT: KeyboardShortcut = KeyboardShortcut::new(CMD, Key::Minus);
     pub const OUTPUT: KeyboardShortcut = KeyboardShortcut::new(CMD, Key::Enter);
+    pub const SHOW_MODE: KeyboardShortcut = KeyboardShortcut::new(CMD_SHIFT, Key::Enter);
+    /// In Show mode only, so a stray key while editing never blacks out the wall.
+    pub const BLACKOUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::B);
+    pub const FREEZE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F);
     pub const ADD_QUAD: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::Q);
     pub const FREE_TRANSFORM: KeyboardShortcut = KeyboardShortcut::new(CMD, Key::T);
     pub const PEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::P);
@@ -104,6 +115,20 @@ pub enum Action {
         index: usize,
         apply: bool,
     },
+    /// Lock the editor for a performance: show view, no overlays on the projector.
+    ToggleShowMode,
+    /// Fade the projector to black, or back.
+    ToggleBlackout,
+    /// Hold the projector on the current frame while editing continues.
+    ToggleFreeze,
+    /// Send the output full screen to `displays[index]`; `None` makes it a window.
+    ChooseDisplay(Option<usize>),
+    /// Resize the canvas to the projector's native size, scaling the surfaces.
+    MatchCanvasToProjector,
+    ExportTemplate,
+    PackageProject,
+    ChooseBackdrop,
+    RemoveBackdrop,
 }
 
 pub struct Transport {
@@ -132,12 +157,21 @@ pub struct NawsMapperApp {
     pub renderer: Renderer,
     pub library: Library,
     pub stagger_step: f32,
+    /// Show mode: the editor is locked and replaced by the show view.
+    pub show_mode: bool,
+    pub backdrop: BackdropImage,
     render_state: egui_wgpu::RenderState,
     output_tex: egui::TextureId,
     output_generation: u64,
+    /// The still frame the projector shows while frozen.
+    frozen_tex: Option<egui::TextureId>,
     actions: Vec<Action>,
     dialogs: FileDialogs,
     prompt: Option<Prompt>,
+    autosave: Autosave,
+    /// Found at startup, waiting for the user's answer.
+    recovered: Option<Recovered>,
+    package: Option<crate::package::Job>,
     /// Set once the user agreed to quit, so the next close request goes through.
     allow_close: bool,
     status: Option<(String, Instant)>,
@@ -176,20 +210,35 @@ impl NawsMapperApp {
             None => Document::new(Project::demo(), None),
         };
 
+        let mut output = OutputWindow::default();
+        if let Some(storage) = cc.storage {
+            load_output_settings(storage, &mut output);
+        }
+        let autosave = Autosave::new(eframe::storage_dir(APP_ID));
+        let recovered = autosave.find();
+        let prompt =
+            recovered.as_ref().map(|r| Prompt::Recover { name: r.name(), age: r.age(recovery::now()) });
+
         Ok(Self {
             doc,
             editor: Editor::default(),
             transport: Transport { playing: true, time: 0.0, last_tick: None },
-            output: OutputWindow::default(),
+            output,
             renderer,
             library: Library::default(),
             stagger_step: 0.25,
+            show_mode: false,
+            backdrop: BackdropImage::default(),
             render_state,
             output_tex,
             output_generation: 0,
+            frozen_tex: None,
             actions: Vec::new(),
             dialogs: FileDialogs::default(),
-            prompt: None,
+            prompt,
+            autosave,
+            recovered,
+            package: None,
             allow_close: false,
             status: None,
             title: String::new(),
@@ -222,6 +271,24 @@ impl NawsMapperApp {
         if self.prompt.is_some() || self.dialogs.busy() {
             return;
         }
+        if self.show_mode {
+            let mut acts = Vec::new();
+            ctx.input_mut(|i| {
+                if i.consume_shortcut(&SHOW_MODE) {
+                    acts.push(Action::ToggleShowMode);
+                }
+                if i.consume_shortcut(&BLACKOUT) {
+                    acts.push(Action::ToggleBlackout);
+                }
+                if i.consume_shortcut(&FREEZE) {
+                    acts.push(Action::ToggleFreeze);
+                }
+                // Every other key is dropped: a stray press must not change the show.
+                i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_)));
+            });
+            self.actions.extend(acts);
+            return;
+        }
         let text_focus = ctx.egui_wants_keyboard_input();
         let transforming = self.editor.transform.is_some();
         let pen = self.editor.pen.is_some();
@@ -234,6 +301,7 @@ impl NawsMapperApp {
                 (SAVE, Action::Save),
                 (OPEN, Action::Open),
                 (NEW, Action::NewDemo),
+                (SHOW_MODE, Action::ToggleShowMode),
                 (OUTPUT, Action::ToggleOutput),
                 (LIBRARY, Action::ToggleLibrary),
             ];
@@ -361,6 +429,8 @@ impl NawsMapperApp {
                     | Action::AddCutout
                     | Action::Pen
                     | Action::EditPoints
+                    | Action::ToggleShowMode
+                    | Action::MatchCanvasToProjector
             )
         {
             self.editor.apply_transform();
@@ -379,6 +449,8 @@ impl NawsMapperApp {
                 | Action::AddSurface(_)
                 | Action::AddCutout
                 | Action::FreeTransform
+                | Action::ToggleShowMode
+                | Action::MatchCanvasToProjector
         ) {
             self.editor.finish_pen();
             self.editor.points = None;
@@ -389,6 +461,7 @@ impl NawsMapperApp {
             Action::Open => self.guard(ctx, frame, Then::Open),
             Action::Save => self.save(ctx, frame, false, None),
             Action::SaveAs => self.save(ctx, frame, true, None),
+            Action::Quit if self.show_mode => self.prompt = Some(Prompt::QuitShow),
             Action::Quit => self.guard(ctx, frame, Then::Quit),
             Action::Undo => {
                 if self.doc.undo() {
@@ -525,6 +598,61 @@ impl NawsMapperApp {
                 }
             }
             Action::ToggleLibrary => self.library.open = !self.library.open,
+            Action::ToggleShowMode => {
+                self.show_mode = !self.show_mode;
+                if self.show_mode {
+                    self.editor.pen = None;
+                    self.library.open = false;
+                    self.output.open = true;
+                    self.output.replace_on_projector();
+                    if self.output.projector().is_none() {
+                        self.set_status("Show mode. Tip: pick the projector in Output → Projector.");
+                    }
+                }
+            }
+            Action::ToggleBlackout => self.output.blackout = !self.output.blackout,
+            Action::ToggleFreeze => self.toggle_freeze(),
+            Action::ChooseDisplay(index) => {
+                self.output.choose_display(index);
+                if let Some(p) = self.output.projector() {
+                    let msg = format!("Output on {}", p.name);
+                    self.set_status(msg);
+                }
+            }
+            Action::MatchCanvasToProjector => {
+                if let Some((w, h)) = self.output.size_mismatch(&self.doc.project) {
+                    self.doc.project.resize_canvas(w, h);
+                    self.editor.fit();
+                    self.set_status(format!("Canvas is now {w}×{h}, pixel for pixel on the projector"));
+                }
+            }
+            Action::ExportTemplate => {
+                let dialog = rfd::AsyncFileDialog::new()
+                    .set_parent(frame)
+                    .set_title("Export Mapping Template")
+                    .add_filter("PNG image (for Photoshop, After Effects…)", &["png"])
+                    .add_filter("SVG vector (for Illustrator, Affinity…)", &["svg"])
+                    .set_file_name(format!("{} template.png", self.doc.display_name()));
+                self.dialogs.start(ctx, Purpose::ExportTemplate, dialog, Kind::SaveFile);
+            }
+            Action::PackageProject => {
+                if self.package.is_some() {
+                    self.set_status("Still packaging…");
+                } else {
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .set_parent(frame)
+                        .set_title("Package Project: choose where to put the package folder");
+                    self.dialogs.start(ctx, Purpose::Package, dialog, Kind::PickFolder);
+                }
+            }
+            Action::ChooseBackdrop => {
+                let dialog = rfd::AsyncFileDialog::new()
+                    .set_parent(frame)
+                    .set_title("Choose a Venue Photo")
+                    .add_filter("Images", IMAGE_EXTENSIONS);
+                self.dialogs.start(ctx, Purpose::ChooseBackdrop, dialog, Kind::PickFile);
+            }
+            Action::RemoveBackdrop => self.doc.project.canvas.backdrop.path = None,
             Action::UsePreset { index, apply } => {
                 let Some(preset) = self.library.presets.get(index) else { return };
                 let (name, generator) = (preset.name, preset.generator.clone());
@@ -538,6 +666,86 @@ impl NawsMapperApp {
                 }
             }
         }
+    }
+
+    fn toggle_freeze(&mut self) {
+        let mut egui_renderer = self.render_state.renderer.write();
+        if let Some(id) = self.frozen_tex.take() {
+            egui_renderer.free_texture(&id);
+            self.renderer.unfreeze();
+        } else {
+            let view = &self.renderer.freeze().view;
+            let id = egui_renderer.register_native_texture(
+                &self.render_state.device,
+                view,
+                wgpu::FilterMode::Linear,
+            );
+            self.frozen_tex = Some(id);
+        }
+    }
+
+    pub fn frozen(&self) -> bool {
+        self.frozen_tex.is_some()
+    }
+
+    /// What the projector shows: the frozen still, or the live output.
+    pub fn projector_texture(&self) -> egui::TextureId {
+        self.frozen_tex.unwrap_or(self.output_tex)
+    }
+
+    fn export_template(&mut self, path: PathBuf) {
+        let svg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"));
+        let path = if path.extension().is_none() { path.with_extension("png") } else { path };
+        let title = self.doc.display_name();
+        let bytes = if svg {
+            Ok(crate::template::svg(&self.doc.project, &title).into_bytes())
+        } else {
+            crate::template::png(&self.doc.project, &title)
+        };
+        match bytes.and_then(|b| Ok(std::fs::write(&path, b)?)) {
+            Ok(()) => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                self.set_status(format!("Exported {name}"));
+            }
+            Err(e) => self.show_error("Could not export the template", format!("{e:#}")),
+        }
+    }
+
+    fn start_package(&mut self, ctx: &egui::Context, parent: PathBuf) {
+        let plan = crate::package::plan(&self.doc.project, &self.doc.display_name(), &parent, |p| p.exists());
+        self.set_status(format!("Packaging {} files…", plan.copies.len()));
+        self.package = Some(crate::package::Job::start(plan, ctx));
+    }
+
+    fn poll_package(&mut self) {
+        let Some(job) = &self.package else { return };
+        let Some(result) = job.poll() else { return };
+        let summary = job.plan_summary.clone();
+        self.package = None;
+        let folder = summary.folder.display().to_string();
+        match result {
+            Ok(()) if summary.missing.is_empty() => {
+                self.set_status(format!("Packaged {} media files into {folder}", summary.files));
+            }
+            Ok(()) => {
+                let list: Vec<String> =
+                    summary.missing.iter().map(|p| format!("• {}", p.display())).collect();
+                self.prompt = Some(Prompt::Message {
+                    title: "Packaged, with missing files".into(),
+                    message: format!(
+                        "The package is in {folder}, but these files could not be found and are not in it:\n\n{}",
+                        list.join("\n")
+                    ),
+                });
+            }
+            Err(e) => self.show_error("Could not package the project", e),
+        }
+    }
+
+    /// Packaging progress for the status bar: (copied, total).
+    pub fn package_progress(&self) -> Option<(usize, usize)> {
+        let job = self.package.as_ref()?;
+        Some((job.copied.load(std::sync::atomic::Ordering::Relaxed), job.plan_summary.files))
     }
 
     fn nudge(&mut self, delta: Vec2) {
@@ -672,6 +880,8 @@ impl NawsMapperApp {
                 Err(e) => self.show_error("Could not open project", format!("{e:#}")),
             },
             Then::Quit => {
+                // Saved, or discarded on purpose: nothing to recover next time.
+                self.autosave.clear();
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -679,6 +889,8 @@ impl NawsMapperApp {
     }
 
     fn replace_document(&mut self, doc: Document) {
+        // The old document was saved or deliberately discarded.
+        self.autosave.clear();
         self.editor.transform = None;
         self.editor.pen = None;
         self.editor.points = None;
@@ -690,7 +902,7 @@ impl NawsMapperApp {
 
     pub fn show_error(&mut self, title: &str, message: String) {
         log::error!("{title}: {message}");
-        self.prompt = Some(Prompt::Error { title: title.into(), message });
+        self.prompt = Some(Prompt::Message { title: title.into(), message });
     }
 
     /// Handles a file dialog that just closed.
@@ -717,6 +929,9 @@ impl NawsMapperApp {
                     src.kind = kind;
                 }
             }
+            Purpose::ExportTemplate => self.export_template(first),
+            Purpose::Package => self.start_package(ctx, first),
+            Purpose::ChooseBackdrop => self.doc.project.canvas.backdrop.path = Some(first),
         }
     }
 
@@ -728,6 +943,22 @@ impl NawsMapperApp {
             PromptAnswer::Save(then) => self.save(ctx, frame, false, Some(then)),
             PromptAnswer::Discard(then) => self.proceed(ctx, frame, then),
             PromptAnswer::Dismiss => {}
+            PromptAnswer::QuitShow => {
+                // Leave Show mode, then quit the usual way (asks about unsaved changes).
+                self.show_mode = false;
+                self.guard(ctx, frame, Then::Quit);
+            }
+            PromptAnswer::Restore => {
+                if let Some(r) = self.recovered.take() {
+                    let name = r.name();
+                    self.replace_document(Document::restored(r.project, r.original));
+                    self.set_status(format!("Restored unsaved changes to \"{name}\". Save to keep them."));
+                }
+            }
+            PromptAnswer::DropRecovery => {
+                self.recovered = None;
+                self.autosave.clear();
+            }
         }
     }
 
@@ -797,6 +1028,11 @@ impl NawsMapperApp {
         if !ctx.input(|i| i.viewport().close_requested()) || self.allow_close {
             return;
         }
+        if self.show_mode {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.prompt.get_or_insert(Prompt::QuitShow);
+            return;
+        }
         self.doc.commit_if_changed();
         if self.doc.dirty {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -817,35 +1053,54 @@ impl eframe::App for NawsMapperApp {
         }
 
         self.transport.tick();
+        self.output.poll_displays(frame);
+        if self.output.step_fade(dt) {
+            ctx.request_repaint();
+        }
         self.handle_shortcuts(&ctx);
-        self.handle_dropped_files(&ctx, frame);
+        if !self.show_mode {
+            self.handle_dropped_files(&ctx, frame);
+        }
         if let Some((purpose, paths)) = self.dialogs.poll() {
             self.finish_dialog(&ctx, frame, purpose, paths);
         }
+        self.poll_package();
+        self.backdrop.sync(&ctx, self.doc.project.canvas.backdrop.path.as_deref());
         self.render_output();
 
-        panels::menu_bar(ui, self);
-        panels::toolbar(ui, self);
-        panels::status_bar(ui, self);
-        panels::left_panel(ui, self);
-        panels::properties_panel(ui, self);
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            self.editor.ui(ui, &mut self.doc.project, self.output_tex);
-        });
-        if let Some(points) = self.editor.finished_pen.take() {
-            match self.doc.add_freeform(&points) {
-                Some(id) => self.editor.selection.set(vec![id]),
-                None => self.set_status("That shape is too small"),
+        if self.show_mode {
+            panels::show_view(ui, self);
+        } else {
+            panels::menu_bar(ui, self);
+            panels::toolbar(ui, self);
+            panels::status_bar(ui, self);
+            panels::left_panel(ui, self);
+            panels::properties_panel(ui, self);
+            egui::CentralPanel::no_frame().show(ui, |ui| {
+                let rect = ui.max_rect();
+                self.editor.ui(ui, &mut self.doc.project, self.output_tex, self.backdrop.get());
+                panels::projector_banner(ui, rect, self);
+            });
+            if let Some(points) = self.editor.finished_pen.take() {
+                match self.doc.add_freeform(&points) {
+                    Some(id) => self.editor.selection.set(vec![id]),
+                    None => self.set_status("That shape is too small"),
+                }
             }
+            panels::library_window(&ctx, self);
         }
-        panels::library_window(&ctx, self);
 
+        let texture = self.projector_texture();
         self.output.show(
             &ctx,
-            self.output_tex,
-            &self.doc.project,
-            &self.editor.selection,
-            self.editor.pointer,
+            OutputFrame {
+                texture,
+                project: &self.doc.project,
+                selection: &self.editor.selection,
+                pointer: if self.show_mode { None } else { self.editor.pointer },
+                show_mode: self.show_mode,
+                frozen: self.frozen(),
+            },
         );
 
         self.run_actions(&ctx, frame);
@@ -862,11 +1117,19 @@ impl eframe::App for NawsMapperApp {
             self.doc.commit_if_changed();
         }
 
+        if self.recovered.is_none() {
+            self.autosave.tick(&self.doc.project, self.doc.path.as_deref(), self.doc.dirty);
+        }
         self.update_title(&ctx);
         self.handle_close(&ctx, frame);
 
-        if self.transport.playing {
+        if self.transport.playing || self.package.is_some() {
             ctx.request_repaint();
+        } else if self.output.open && self.output.display.is_some() {
+            // Notice the chosen projector being plugged in, even while idle.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        } else if self.doc.dirty {
+            ctx.request_repaint_after(recovery::INTERVAL);
         }
     }
 
@@ -874,7 +1137,19 @@ impl eframe::App for NawsMapperApp {
         if let Some(path) = &self.doc.path {
             eframe::set_value(storage, LAST_PROJECT_KEY, path);
         }
+        save_output_settings(storage, &self.output);
     }
+}
+
+/// The projector choice and fade time, remembered across launches.
+fn save_output_settings(storage: &mut dyn eframe::Storage, output: &OutputWindow) {
+    eframe::set_value(storage, DISPLAY_KEY, &output.display);
+    eframe::set_value(storage, FADE_KEY, &output.fade_secs);
+}
+
+fn load_output_settings(storage: &dyn eframe::Storage, output: &mut OutputWindow) {
+    output.display = eframe::get_value::<Option<DisplayChoice>>(storage, DISPLAY_KEY).flatten();
+    output.fade_secs = eframe::get_value(storage, FADE_KEY).unwrap_or(output.fade_secs);
 }
 
 fn media_dialog(frame: &eframe::Frame, title: &str) -> rfd::AsyncFileDialog {
@@ -885,4 +1160,55 @@ fn media_dialog(frame: &eframe::Frame, title: &str) -> rfd::AsyncFileDialog {
         .add_filter("Images and videos", &all)
         .add_filter("Images", IMAGE_EXTENSIONS)
         .add_filter("Videos (H.264 MP4)", VIDEO_EXTENSIONS)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct MemoryStorage(HashMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn projector_choice_and_fade_survive_a_restart() {
+        let mut storage = MemoryStorage::default();
+        let mut before = OutputWindow::default();
+        before.display = Some(DisplayChoice { name: "EPSON PJ".into(), ordinal: 1 });
+        before.fade_secs = 2.5;
+        save_output_settings(&mut storage, &before);
+
+        let mut after = OutputWindow::default();
+        load_output_settings(&storage, &mut after);
+        assert_eq!(after.display, before.display);
+        assert_eq!(after.fade_secs, 2.5);
+
+        // "Window" (no projector) is remembered too.
+        before.display = None;
+        save_output_settings(&mut storage, &before);
+        after.display = Some(DisplayChoice { name: "stale".into(), ordinal: 0 });
+        load_output_settings(&storage, &mut after);
+        assert_eq!(after.display, None);
+    }
+
+    #[test]
+    fn nothing_stored_keeps_the_defaults() {
+        let mut out = OutputWindow::default();
+        load_output_settings(&MemoryStorage::default(), &mut out);
+        assert_eq!((out.display, out.fade_secs), (None, 1.0));
+    }
 }

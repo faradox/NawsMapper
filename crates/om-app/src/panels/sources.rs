@@ -110,6 +110,7 @@ pub fn sources_panel(ui: &mut Ui, app: &mut NawsMapperApp) {
 
     let error = app.renderer.source_error(id).map(str::to_owned);
     let media_size = app.renderer.source_size(id);
+    let loading = app.renderer.source_loading(id);
     let duration = app.renderer.video_info(id).map(|v| v.duration);
     let mut replace = false;
     let Some(src) = app.doc.project.source_mut(id) else { return };
@@ -138,6 +139,13 @@ pub fn sources_panel(ui: &mut Ui, app: &mut NawsMapperApp) {
                     if let Some((w, h)) = media_size {
                         prop_label(ui, "Size", "");
                         ui.label(format!("{w} × {h} px"));
+                        ui.end_row();
+                    } else if loading {
+                        prop_label(ui, "Size", "");
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading…");
+                        });
                         ui.end_row();
                     }
                     if let Some(d) = duration {

@@ -10,7 +10,7 @@ cargo run --release
 Needs a Vulkan driver (Mesa is fine), X11 or Wayland, GTK 3 (for file dialogs; the dev
 headers to build) and a C++ compiler (OpenH264 is compiled from source by `openh264-sys2`).
 The GPU backend is chosen by wgpu automatically. Force one with `WGPU_BACKEND=vulkan` or `WGPU_BACKEND=gl`.
-Logging: `RUST_LOG=om_app=debug,om_render=debug cargo run`.
+Logging: `RUST_LOG=nawsmapper=debug,om_render=debug cargo run` (the app logs under its binary name).
 
 ## macOS (primary target)
 
