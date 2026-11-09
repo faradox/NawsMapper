@@ -1,6 +1,7 @@
 //! Docked panels around the canvas.
 
 mod chrome;
+mod cues;
 mod layers;
 mod library;
 mod properties;
@@ -8,6 +9,7 @@ mod show;
 mod sources;
 
 pub use chrome::{menu_bar, shape_icon, status_bar, toolbar};
+pub use cues::cues_panel;
 pub use library::{Library, library_window};
 pub use properties::properties_panel;
 pub use show::{projector_banner, show_view};

@@ -190,7 +190,27 @@ mapped object at once.
   changes every point at once.
 - The texture fits the shape's bounding box, and a free-form shape can be a cutout.
 
-## 9. Cut holes (Cutouts)
+## 9. Curved objects (Mesh Warp)
+
+Four corners fit flat faces. For a column, an arch, a round sculpture or a curtain,
+bend the surface:
+
+1. Select the surface and press **`W`** (or **⌗ Warp** in the toolbar, or **Mesh
+   Warp** in Properties). A grid of points appears on it.
+2. Drag the points until the projected picture lies on the object. Look at the object,
+   not the screen: with **Outlines on projector** on, the grid shows on the projector
+   too. Arrow keys nudge the selected point.
+3. The four corners are still the corner handles: pin them first, then bend.
+4. **Enter** or **Esc** when done. Double-clicking a warped surface brings the grid back.
+
+In Properties → **Warp**: **Grid** sets how many points across and down (up to 12 ×
+12; changing it keeps the current shape), **Smooth** bends in curves through the
+points (off: straight lines between them, for folded or faceted objects), **Reset**
+straightens it, **Remove** takes the warp away. The shape, its border and the texture
+all bend along. Edit Points works on unwarped shapes only, so shape the outline first,
+then bend.
+
+## 10. Cut holes (Cutouts)
 
 A **cutout** is a shape that removes everything below it: the window in a wall, a
 plant in front of the screen, the gap between two objects.
@@ -204,7 +224,7 @@ plant in front of the screen, the gap between two objects.
   opacity pulse animates it.
 - In the editor, cutouts have a dashed pink outline.
 
-## 10. Save
+## 11. Save
 
 `Cmd+S` saves an `.omap` project; `Cmd+Shift+S` saves under a new name.
 NawsMapper reopens your last project on launch. When you are about to lose
@@ -213,7 +233,7 @@ unsaved changes (New, Open, Quit), it asks first.
 If NawsMapper ever closes unexpectedly, your unsaved work isn't lost: changes are kept
 aside every 30 seconds, and the next start offers to **Restore** them.
 
-## 11. Prepare at home
+## 12. Prepare at home
 
 You don't need to be at the venue to start mapping.
 
@@ -233,14 +253,40 @@ You don't need to be at the venue to start mapping.
   project and a copy of every image, video and the venue photo in it. Open the project
   from there on the other computer. If a file couldn't be found, it tells you which.
 
-## 12. The show
+## 13. Cues: the looks of your show
+
+A show usually moves through several looks: calm blue at the start, all surfaces
+pulsing at the chorus, only the door lit at the end. **Cues** remember them. The
+**Cues** strip sits under the canvas.
+
+1. Set up the first look: sources, colors, opacity, animation, which surfaces are
+   visible. Click **● Record**. That's cue 1.
+2. Change things for the next look and click **● Record** again. That's cue 2.
+3. **▶ GO** plays the next cue: opacity, colors and other numbers glide over the cue's
+   **Fade** time; a different source, blend mode or animation crossfades.
+
+A cue remembers how surfaces **look**, never where they are: mapping is done once and
+every cue uses it. Surfaces added later keep their look in older cues.
+
+- Click a cue to play it next; double-click to play it now.
+- Below the cards: the cue's name, **Fade** (0 cuts) and **Then play the next cue
+  after …**, which runs the next cue on its own (counted from the start of this one).
+  Chain a few for a loop that runs without anyone pressing GO.
+- **LIVE ●** means you changed something since the cue played. Right-click the cue →
+  **Update with Current Look** to keep the change. The menu also moves and deletes
+  cues.
+- Playing a cue is an ordinary change: `Cmd+Z` takes it back.
+
+## 14. The show
 
 When everything is aligned, press **`Cmd+Shift+Enter`** (or **● Show** in the
 toolbar) for **Show mode**. The window turns into a small control screen: what the
-audience sees, the clock, and two buttons. Editing is locked, the outlines and the
-mouse disappear from the projector, and stray keys do nothing, so nothing on the wall
-changes by accident. Quitting asks first.
+audience sees, the clock, the cues and a few buttons. Editing is locked, the outlines
+and the mouse disappear from the projector, and stray keys do nothing, so nothing on
+the wall changes by accident. Quitting asks first.
 
+- **GO** (`Space`): plays the next cue. `Esc` finishes a running fade at once and
+  stops auto-follow.
 - **Blackout** (`B`): the projector fades to black, and back when you press it again.
   **Fade** sets how long that takes (0 cuts immediately).
 - **Freeze** (`F`): the projector holds the current picture. Handy for fixing

@@ -182,6 +182,77 @@ fn canvas_props(ui: &mut Ui, app: &mut NawsMapperApp) {
     ui.label(RichText::new("Tip: click a surface on the canvas or in Layers to edit it. Shift-click to edit several at once.").weak());
 }
 
+/// Mesh warp rows of the Surface section. Every change is an action that
+/// works on each selected surface's own mesh, so multi-edit never copies one
+/// surface's bent grid onto another.
+fn mesh_rows(ui: &mut Ui, app: &mut NawsMapperApp, s: &Surface) {
+    prop_label(ui, "Warp", "Bend the surface with a grid of points, for curved and uneven objects");
+    let Some(w) = s.warp.clone() else {
+        if ui
+            .add_enabled(!s.locked, egui::Button::new("⌗ Mesh Warp"))
+            .on_hover_text("Bend this surface onto a curved object (W)")
+            .clicked()
+        {
+            app.act(Action::EditMesh);
+        }
+        ui.end_row();
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        let bending = app.editor.mesh.is_some_and(|m| m.id == s.id);
+        let label = if bending { "Done" } else { "⌗ Edit Mesh" };
+        if ui
+            .add_enabled(!s.locked, egui::Button::new(label).selected(bending))
+            .on_hover_text("Drag the grid points on the canvas (W). Double-click the surface also opens it.")
+            .clicked()
+        {
+            app.act(if bending { Action::ExitMesh } else { Action::EditMesh });
+        }
+        if ui.small_button("Reset").on_hover_text("Straighten every point").clicked() {
+            app.act(Action::ResetMesh);
+        }
+        if ui.small_button("Remove").on_hover_text("Remove the mesh warp").clicked() {
+            app.act(Action::RemoveMesh);
+        }
+    });
+    ui.end_row();
+
+    prop_label(ui, "Grid", "Points across × down. Changing it keeps the current shape.");
+    ui.horizontal(|ui| {
+        let (mut cols, mut rows) = (w.cols, w.rows);
+        let sizes = om_core::warp::MIN_POINTS..=om_core::warp::MAX_POINTS;
+        let mut changed = false;
+        egui::ComboBox::from_id_salt("mesh_cols").selected_text(cols.to_string()).width(44.0).show_ui(
+            ui,
+            |ui| {
+                for n in sizes.clone() {
+                    changed |= ui.selectable_value(&mut cols, n, n.to_string()).changed();
+                }
+            },
+        );
+        ui.label("×");
+        egui::ComboBox::from_id_salt("mesh_rows").selected_text(rows.to_string()).width(44.0).show_ui(
+            ui,
+            |ui| {
+                for n in sizes {
+                    changed |= ui.selectable_value(&mut rows, n, n.to_string()).changed();
+                }
+            },
+        );
+        if changed {
+            app.act(Action::ResizeMesh { cols, rows });
+        }
+    });
+    ui.end_row();
+
+    prop_label(ui, "Curves", "Smooth: curves through the points. Off: straight lines between them.");
+    let mut smooth = w.smooth;
+    if ui.checkbox(&mut smooth, "Smooth").changed() {
+        app.act(Action::SetMeshSmooth(smooth));
+    }
+    ui.end_row();
+}
+
 fn surface_props(ui: &mut Ui, app: &mut NawsMapperApp, s: &mut Surface, count: usize) {
     if count > 1 {
         ui.label(RichText::new(format!("{count} surfaces selected")).strong());
@@ -222,9 +293,12 @@ fn surface_props(ui: &mut Ui, app: &mut NawsMapperApp, s: &mut Surface, count: u
                     } else {
                         "Turn this shape into points you can move, add and remove"
                     };
+                    let hint =
+                        if s.warp.is_some() { "Remove the mesh warp first to edit points" } else { hint };
                     if ui
-                        .add_enabled(!s.locked, egui::Button::new("✎ Edit Points"))
+                        .add_enabled(!s.locked && s.warp.is_none(), egui::Button::new("✎ Edit Points"))
                         .on_hover_text(hint)
+                        .on_disabled_hover_text(hint)
                         .clicked()
                     {
                         app.act(Action::EditPoints);
@@ -247,6 +321,8 @@ fn surface_props(ui: &mut Ui, app: &mut NawsMapperApp, s: &mut Surface, count: u
                     ui.end_row();
                 }
             }
+
+            mesh_rows(ui, app, s);
 
             prop_label(
                 ui,

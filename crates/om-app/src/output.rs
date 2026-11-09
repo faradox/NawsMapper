@@ -13,7 +13,7 @@ use glam::Vec2;
 use om_core::Project;
 
 use crate::displays::{Display, DisplayChoice};
-use crate::editor::{Selection, draw_output_overlays};
+use crate::editor::{MeshEdit, Selection, draw_output_overlays};
 
 /// How often the list of connected displays is refreshed.
 const DISPLAY_POLL_SECS: f32 = 1.0;
@@ -75,6 +75,8 @@ pub struct OutputFrame<'a> {
     /// The projector holds a still frame: no live overlays either, or the
     /// audience would see the edits the freeze is hiding.
     pub frozen: bool,
+    /// The mesh being bent, drawn with the outlines so it can be aligned on the object.
+    pub mesh: Option<MeshEdit>,
 }
 
 impl OutputWindow {
@@ -164,7 +166,7 @@ impl OutputWindow {
             // Nothing but the picture during a show or while (fading to) black.
             let extras = !out.show_mode && !out.frozen && level >= 1.0;
             if extras && self.show_outlines {
-                draw_output_overlays(painter, rect, out.project, out.selection);
+                draw_output_overlays(painter, rect, out.project, out.selection, out.mesh);
             }
             if extras
                 && self.show_cursor

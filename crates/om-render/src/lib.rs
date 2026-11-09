@@ -12,6 +12,10 @@
 //! Screen, Multiply, Subtract, Exclusion) use their own pipeline. All others
 //! read what is already drawn: before such a surface, the area under it is
 //! copied into a backdrop texture, and the shader blends against that.
+//!
+//! A mesh-warped surface is tessellated on the CPU (`om_core::warp`) and drawn
+//! with the "mesh" variant of its pipeline from a vertex buffer; the fragment
+//! shader is the same.
 
 mod textures;
 
@@ -24,7 +28,10 @@ use om_core::anim::evaluate;
 use om_core::border::{BorderEffect, border_path};
 use om_core::geom::quad_aspect;
 use om_core::shape::{MAX_OUTLINE_POINTS, outline_uv};
-use om_core::{BlendMode, Generator, Mapping, Mask, Palette, Project, SourceId, SourceKind, Surface};
+use om_core::warp::{MeshVertex, grid_indices};
+use om_core::{
+    BlendMode, Generator, Mapping, Mask, Palette, Project, SourceId, SourceKind, Surface, SurfaceId,
+};
 
 pub use om_media::{VIDEO_EXTENSIONS, VideoInfo};
 use textures::TextureCache;
@@ -68,6 +75,46 @@ fn mat3_cols(m: Mat3) -> [[f32; 4]; 3] {
     [m.x_axis.extend(0.0).into(), m.y_axis.extend(0.0).into(), m.z_axis.extend(0.0).into()]
 }
 
+/// One vertex of a mesh-warped surface, as the `vs_mesh` stage reads it.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuMeshVertex {
+    position: [f32; 3],
+    uv: [f32; 2],
+}
+
+impl From<MeshVertex> for GpuMeshVertex {
+    fn from(v: MeshVertex) -> Self {
+        Self { position: v.position.into(), uv: v.uv.into() }
+    }
+}
+
+/// A blend state's two pipelines: the plain quad, and the tessellated mesh
+/// for warped surfaces.
+struct Pipelines {
+    quad: wgpu::RenderPipeline,
+    mesh: wgpu::RenderPipeline,
+}
+
+impl Pipelines {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+        blend: wgpu::BlendState,
+        label: &str,
+    ) -> Self {
+        Self {
+            quad: create_pipeline(device, layout, shader, blend, false, label),
+            mesh: create_pipeline(device, layout, shader, blend, true, &format!("{label} (mesh)")),
+        }
+    }
+
+    fn get(&self, mesh: bool) -> &wgpu::RenderPipeline {
+        if mesh { &self.mesh } else { &self.quad }
+    }
+}
+
 /// The offscreen render target that receives the composed canvas.
 pub struct OutputTarget {
     pub texture: wgpu::Texture,
@@ -79,10 +126,20 @@ pub struct OutputTarget {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    /// One pipeline per fixed-function blend mode.
-    pipelines: HashMap<BlendMode, wgpu::RenderPipeline>,
+    /// One pipeline pair per fixed-function blend mode.
+    pipelines: HashMap<BlendMode, Pipelines>,
     /// Normal blending; the shader does the blend math against the backdrop.
-    backdrop_pipeline: wgpu::RenderPipeline,
+    backdrop_pipeline: Pipelines,
+    /// Vertices of this frame's warped surfaces; grows as needed.
+    mesh_vertices: wgpu::Buffer,
+    /// The triangle list of one tessellated grid, shared by all warped surfaces.
+    mesh_indices: wgpu::Buffer,
+    mesh_index_count: u32,
+    /// Tessellated warped surfaces, rebuilt only when their geometry changes.
+    mesh_cache: HashMap<SurfaceId, CachedMesh>,
+    /// Which cached meshes the vertex buffer holds, in order.
+    uploaded_meshes: Vec<(SurfaceId, u64)>,
+    mesh_generation: u64,
     backdrop_layout: wgpu::BindGroupLayout,
     /// Copy of the canvas under the surface being drawn. Grows to the
     /// largest target it was used with.
@@ -148,19 +205,27 @@ impl Renderer {
         let pipelines = BlendMode::all()
             .filter_map(|mode| {
                 let blend = fixed_blend(mode)?;
-                Some((
-                    mode,
-                    create_pipeline(device, &layout, &shader, blend, &format!("om surface {mode:?}")),
-                ))
+                Some((mode, Pipelines::new(device, &layout, &shader, blend, &format!("om surface {mode:?}"))))
             })
             .collect();
-        let backdrop_pipeline = create_pipeline(
+        let backdrop_pipeline = Pipelines::new(
             device,
             &layout,
             &shader,
             wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             "om surface backdrop blend",
         );
+        let indices = grid_indices();
+        let mesh_indices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("om mesh indices"),
+            size: (indices.len() * size_of::<u16>()).next_multiple_of(4) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut index_bytes = bytemuck::cast_slice::<u16, u8>(&indices).to_vec();
+        index_bytes.resize(index_bytes.len().next_multiple_of(4), 0);
+        queue.write_buffer(&mesh_indices, 0, &index_bytes);
+        let mesh_vertices = create_vertex_buffer(device, 1);
         let backdrop = create_backdrop(device, &backdrop_layout, 1, 1);
 
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
@@ -175,6 +240,12 @@ impl Renderer {
             queue: queue.clone(),
             pipelines,
             backdrop_pipeline,
+            mesh_vertices,
+            mesh_indices,
+            mesh_index_count: indices.len() as u32,
+            mesh_cache: HashMap::new(),
+            uploaded_meshes: Vec::new(),
+            mesh_generation: 0,
             backdrop_layout,
             backdrop,
             uniform_layout,
@@ -266,6 +337,70 @@ impl Renderer {
         self.draw(project, time, &target);
     }
 
+    /// Tessellates the warped surfaces (or reuses last frame's grids) and
+    /// puts them into the vertex buffer; one entry per visible surface.
+    fn prepare_meshes(&mut self, visible: &[&Surface]) -> Vec<Option<Mesh>> {
+        let mut order = Vec::new();
+        for s in visible {
+            // A cue crossfade draws some surfaces twice, with the same geometry.
+            let Some(warp) = s.active_warp().filter(|_| !order.iter().any(|(id, _)| *id == s.id)) else {
+                continue;
+            };
+            let margin = mesh_margin(s);
+            let fresh = self
+                .mesh_cache
+                .get(&s.id)
+                .is_some_and(|c| c.corners == s.corners && &c.warp == warp && c.margin == margin);
+            if !fresh {
+                let tessellated = warp.tessellate(s.corners, margin);
+                let bounds = bounding_quad(tessellated.iter().map(|v| v.position.truncate() / v.position.z));
+                self.mesh_generation += 1;
+                let mesh = CachedMesh {
+                    corners: s.corners,
+                    warp: warp.clone(),
+                    margin,
+                    vertices: tessellated.into_iter().map(GpuMeshVertex::from).collect(),
+                    bounds,
+                    generation: self.mesh_generation,
+                };
+                self.mesh_cache.insert(s.id, mesh);
+            }
+            order.push((s.id, self.mesh_cache[&s.id].generation));
+        }
+        if order.is_empty() {
+            return vec![None; visible.len()];
+        }
+        // Forget surfaces that are no longer warped (only on frames that draw
+        // meshes, so thumbnail renders don't empty the cache).
+        self.mesh_cache.retain(|id, _| order.iter().any(|(o, _)| o == id));
+
+        let len = |id: &SurfaceId| self.mesh_cache[id].vertices.len();
+        if order != self.uploaded_meshes {
+            let mut bytes: Vec<u8> = Vec::new();
+            for (id, _) in &order {
+                bytes.extend_from_slice(bytemuck::cast_slice(&self.mesh_cache[id].vertices));
+            }
+            if self.mesh_vertices.size() < bytes.len() as u64 {
+                self.mesh_vertices = create_vertex_buffer(&self.device, bytes.len());
+            }
+            self.queue.write_buffer(&self.mesh_vertices, 0, &bytes);
+            self.uploaded_meshes = order.clone();
+        }
+        let mut base = 0;
+        let mut starts = HashMap::new();
+        for (id, _) in &order {
+            starts.insert(*id, base);
+            base += len(id) as i32;
+        }
+        visible
+            .iter()
+            .map(|s| {
+                let base_vertex = *starts.get(&s.id).filter(|_| s.active_warp().is_some())?;
+                Some(Mesh { base_vertex, bounds: self.mesh_cache[&s.id].bounds })
+            })
+            .collect()
+    }
+
     /// Renders one [`THUMB_SIZE`] tile per generator into the thumbnail
     /// atlas, row by row. See [`Renderer::thumbnail_uv`].
     pub fn render_thumbnails(&mut self, generators: &[Generator], time: f64) {
@@ -321,9 +456,14 @@ impl Renderer {
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
         let canvas = project.canvas.size();
+        let meshes = self.prepare_meshes(&visible);
+
         let mut data = vec![0u8; self.uniform_stride as usize * visible.len().max(1)];
         for (i, s) in visible.iter().enumerate() {
-            let u = surface_uniforms(project, s, canvas, time as f32);
+            let mut u = surface_uniforms(project, s, canvas, time as f32);
+            if meshes[i].is_some() {
+                u.shape[2] = 1.0;
+            }
             let off = i * self.uniform_stride as usize;
             data[off..off + size_of::<SurfaceUniforms>()].copy_from_slice(bytemuck::bytes_of(&u));
         }
@@ -335,11 +475,13 @@ impl Renderer {
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("om render") });
         let mut pass = Some(begin_pass(&mut encoder, &view, wgpu::LoadOp::Clear(clear), &self.backdrop.1));
         for (i, s) in visible.iter().enumerate() {
+            let mesh = meshes[i].as_ref();
             let pipeline = match self.pipelines.get(&effective_blend(s)) {
-                Some(p) => p,
+                Some(p) => p.get(mesh.is_some()),
                 None => {
                     // Off-canvas surfaces draw nothing.
-                    let Some((origin, extent)) = pixel_bounds(draw_corners(s), size) else { continue };
+                    let area = mesh.map_or_else(|| draw_corners(s), |m| m.bounds);
+                    let Some((origin, extent)) = pixel_bounds(area, size) else { continue };
                     // A copy can't happen inside a pass: end it, copy, continue.
                     drop(pass.take());
                     encoder.copy_texture_to_texture(
@@ -358,14 +500,21 @@ impl Renderer {
                         extent,
                     );
                     pass = Some(begin_pass(&mut encoder, &view, wgpu::LoadOp::Load, &self.backdrop.1));
-                    &self.backdrop_pipeline
+                    self.backdrop_pipeline.get(mesh.is_some())
                 }
             };
             let pass = pass.as_mut().expect("a pass is always open here");
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[(i as u64 * self.uniform_stride) as u32]);
             pass.set_bind_group(1, self.textures.bind_group_for(s.source, project), &[]);
-            pass.draw(0..6, 0..1);
+            match mesh {
+                Some(m) => {
+                    pass.set_vertex_buffer(0, self.mesh_vertices.slice(..));
+                    pass.set_index_buffer(self.mesh_indices.slice(..), wgpu::IndexFormat::Uint16);
+                    pass.draw_indexed(0..self.mesh_index_count, m.base_vertex, 0..1);
+                }
+                None => pass.draw(0..6, 0..1),
+            }
         }
         drop(pass);
         self.queue.submit([encoder.finish()]);
@@ -416,6 +565,51 @@ fn effective_blend(s: &Surface) -> BlendMode {
 /// The quad a surface is drawn with: its corners, or, when its border
 /// paints outside the shape, their bounding box grown by that much. Must
 /// match `vs_main` in surface.wgsl.
+/// A warped surface's grid, and what it was made from.
+struct CachedMesh {
+    corners: [Vec2; 4],
+    warp: om_core::Warp,
+    margin: f32,
+    vertices: Vec<GpuMeshVertex>,
+    bounds: [Vec2; 4],
+    generation: u64,
+}
+
+/// Where a warped surface's vertices start in this frame's vertex buffer,
+/// and the box they cover (canvas px).
+#[derive(Clone, Copy)]
+struct Mesh {
+    base_vertex: i32,
+    bounds: [Vec2; 4],
+}
+
+/// How far (uv units) a warped surface's grid reaches past its edges, so a
+/// border that paints outside the shape has pixels to paint on.
+fn mesh_margin(s: &Surface) -> f32 {
+    let px = s.border.outer_extent();
+    if px <= 0.0 {
+        return 0.0;
+    }
+    let c = s.corners;
+    let shortest = (0..4).map(|i| c[i].distance(c[(i + 1) % 4])).fold(f32::INFINITY, f32::min);
+    (px / shortest.max(1.0)).min(0.5)
+}
+
+/// The axis-aligned box around `points`, as four corners.
+fn bounding_quad(points: impl Iterator<Item = Vec2>) -> [Vec2; 4] {
+    let (min, max) = points.fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)]
+}
+
+fn create_vertex_buffer(device: &wgpu::Device, bytes: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("om mesh vertices"),
+        size: (bytes.max(1).next_power_of_two() as u64).max(256),
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn draw_corners(s: &Surface) -> [Vec2; 4] {
     let margin = s.border.outer_extent();
     if margin <= 0.0 {
@@ -542,7 +736,7 @@ fn surface_uniforms(project: &Project, s: &Surface, canvas: Vec2, time: f32) -> 
     let mut arc = [[0.0; 4]; MAX_OUTLINE_POINTS / 4];
     let mut perimeter = 0.0;
     let outline = if border_on && border.needs_path() {
-        let bp = border_path(s.mask, &s.path, c, period);
+        let bp = border_path(s.mask, &s.path, c, s.active_warp(), period);
         for (i, d) in bp.distances.iter().take(MAX_OUTLINE_POINTS).enumerate() {
             arc[i / 4][i % 4] = *d;
         }
@@ -629,16 +823,24 @@ fn create_pipeline(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     blend: wgpu::BlendState,
+    mesh: bool,
     label: &str,
 ) -> wgpu::RenderPipeline {
+    const MESH_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
+    let mesh_layout = [Some(wgpu::VertexBufferLayout {
+        array_stride: size_of::<GpuMeshVertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &MESH_ATTRIBUTES,
+    })];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(if mesh { "vs_mesh" } else { "vs_main" }),
             compilation_options: Default::default(),
-            buffers: &[],
+            buffers: if mesh { &mesh_layout } else { &[] },
         },
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,

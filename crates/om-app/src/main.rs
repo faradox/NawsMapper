@@ -6,6 +6,7 @@
 mod app;
 mod backdrop;
 mod build_info;
+mod cues;
 mod dialogs;
 mod displays;
 mod document;

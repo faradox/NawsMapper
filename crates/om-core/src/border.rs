@@ -12,6 +12,7 @@ use crate::Color;
 use crate::geom::Homography;
 use crate::project::Palette;
 use crate::shape::{MAX_OUTLINE_POINTS, Mask, PathPoint, outline_uv};
+use crate::warp::Warp;
 
 /// Most pieces one outline edge is split into (see [`border_path`]).
 const MAX_EDGE_PIECES: usize = 16;
@@ -339,11 +340,18 @@ pub struct BorderPath {
 /// under perspective. With a `period`, distances are stretched slightly so a
 /// whole number of periods fits around the shape and the pattern closes
 /// without a seam.
-pub fn border_path(mask: Mask, path: &[PathPoint], corners: [Vec2; 4], period: f32) -> BorderPath {
+pub fn border_path(
+    mask: Mask,
+    path: &[PathPoint],
+    corners: [Vec2; 4],
+    warp: Option<&Warp>,
+    period: f32,
+) -> BorderPath {
     let outline = outline_uv(mask, path);
     let h = Homography::from_corners(corners);
+    let to_canvas = |uv: Vec2| h.map(warp.map_or(uv, |w| w.map(uv)));
     let n = outline.len();
-    let edge_len = |i: usize| h.map(outline[i]).distance(h.map(outline[(i + 1) % n]));
+    let edge_len = |i: usize| to_canvas(outline[i]).distance(to_canvas(outline[(i + 1) % n]));
     let total: f32 = (0..n).map(edge_len).sum();
 
     let mut points = Vec::with_capacity(MAX_OUTLINE_POINTS);
@@ -351,17 +359,24 @@ pub fn border_path(mask: Mask, path: &[PathPoint], corners: [Vec2; 4], period: f
     for i in 0..n {
         let extra = if total > 0.0 { (budget as f32 * edge_len(i) / total) as usize } else { 0 };
         let pieces = (1 + extra).min(MAX_EDGE_PIECES);
-        // Equal steps on the canvas (straight edges stay straight under a homography).
-        let (a, b) = (h.map(outline[i]), h.map(outline[(i + 1) % n]));
         points.push(outline[i]);
-        points.extend((1..pieces).map(|k| h.unmap(a.lerp(b, k as f32 / pieces as f32))));
+        let steps = (1..pieces).map(|k| k as f32 / pieces as f32);
+        if warp.is_some() {
+            // Bent edges: even steps in the unit square are close enough.
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            points.extend(steps.map(|t| a.lerp(b, t)));
+        } else {
+            // Equal steps on the canvas (straight edges stay straight under a homography).
+            let (a, b) = (h.map(outline[i]), h.map(outline[(i + 1) % n]));
+            points.extend(steps.map(|t| h.unmap(a.lerp(b, t))));
+        }
     }
 
     let mut distances = Vec::with_capacity(points.len());
     let mut along = 0.0;
     for (i, p) in points.iter().enumerate() {
         distances.push(along);
-        along += h.map(*p).distance(h.map(points[(i + 1) % points.len()]));
+        along += to_canvas(*p).distance(to_canvas(points[(i + 1) % points.len()]));
     }
     let mut perimeter = along;
     if period > 0.0 && along > 0.0 {
@@ -381,8 +396,20 @@ mod tests {
     }
 
     #[test]
+    fn a_bent_edge_is_longer() {
+        let flat = border_path(Mask::Quad, &[], square(100.0), None, 0.0);
+        let mut w = Warp::identity(3, 3);
+        w.points[1].y -= 0.3;
+        let bent = border_path(Mask::Quad, &[], square(100.0), Some(&w), 0.0);
+        assert!((flat.perimeter - 400.0).abs() < 1e-2);
+        // The top edge became an arch: longer than 100 px, shorter than going up and over.
+        assert!(bent.perimeter > 410.0 && bent.perimeter < 460.0, "{}", bent.perimeter);
+        assert!(bent.distances.windows(2).all(|d| d[1] > d[0]), "distances increase along the outline");
+    }
+
+    #[test]
     fn whole_periods_fit_around_the_shape() {
-        let b = border_path(Mask::Quad, &[], square(100.0), 30.0);
+        let b = border_path(Mask::Quad, &[], square(100.0), None, 30.0);
         assert_eq!(b.perimeter, 390.0, "400 px of outline holds 13 periods of 30 px");
         assert_eq!(b.distances[0], 0.0);
         assert!(b.distances.windows(2).all(|w| w[0] < w[1]));
@@ -391,20 +418,20 @@ mod tests {
 
     #[test]
     fn continuous_styles_keep_the_true_length() {
-        let b = border_path(Mask::Quad, &[], square(100.0), 0.0);
+        let b = border_path(Mask::Quad, &[], square(100.0), None, 0.0);
         assert!((b.perimeter - 400.0).abs() < 1e-3);
     }
 
     #[test]
     fn subdivided_outline_keeps_the_shape() {
-        let b = border_path(Mask::Quad, &[], square(100.0), 0.0);
+        let b = border_path(Mask::Quad, &[], square(100.0), None, 0.0);
         assert!(b.points.len() > 4 && b.points.len() <= MAX_OUTLINE_POINTS);
         for p in &b.points {
             let on_edge =
                 p.x.abs() < 1e-5 || p.y.abs() < 1e-5 || (p.x - 1.0).abs() < 1e-5 || (p.y - 1.0).abs() < 1e-5;
             assert!(on_edge, "{p}");
         }
-        let star = border_path(Mask::Star, &[], square(100.0), 10.0);
+        let star = border_path(Mask::Star, &[], square(100.0), None, 10.0);
         assert!(star.points.len() <= MAX_OUTLINE_POINTS);
         assert!(star.points.len() > outline_uv(Mask::Star, &[]).len());
     }
@@ -414,7 +441,7 @@ mod tests {
         // Strong keystone: the bottom edge is 4× the top one.
         let c =
             [Vec2::new(150.0, 0.0), Vec2::new(250.0, 0.0), Vec2::new(400.0, 300.0), Vec2::new(0.0, 300.0)];
-        let b = border_path(Mask::Quad, &[], c, 0.0);
+        let b = border_path(Mask::Quad, &[], c, None, 0.0);
         let h = Homography::from_corners(c);
         // The shader interpolates distances linearly in the unit square
         // within each piece; that must stay close to the true distance.

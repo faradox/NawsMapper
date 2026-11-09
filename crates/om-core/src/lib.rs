@@ -8,18 +8,22 @@
 pub mod anim;
 pub mod border;
 pub mod catalog;
+pub mod cue;
 pub mod diff;
 pub mod geom;
 pub mod history;
 pub mod project;
 pub mod shape;
+pub mod warp;
 
 pub use anim::{Animation, Lfo, SurfaceFrame, Wave};
 pub use border::{Border, BorderEffect, BorderPosition, BorderStyle};
+pub use cue::{Cue, CueId};
 pub use geom::Homography;
 pub use history::History;
 pub use project::*;
 pub use shape::{Mask, PathPoint};
+pub use warp::Warp;
 
 /// Straight (non-premultiplied) RGBA color in display (sRGB-encoded) space, 0..1.
 pub type Color = [f32; 4];

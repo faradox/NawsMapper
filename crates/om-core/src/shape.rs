@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geom::Homography;
 use crate::project::Surface;
+use crate::warp::Warp;
 
 /// Most anchor points a free-form path can have.
 pub const MAX_PATH_POINTS: usize = 64;
@@ -19,6 +20,8 @@ pub const MAX_PATH_POINTS: usize = 64;
 pub const MAX_OUTLINE_POINTS: usize = 128;
 /// Points of the polygon that approximates an ellipse outline.
 const ELLIPSE_SEGMENTS: usize = 64;
+/// Pieces per unit-square length when straight edges bend under a mesh warp.
+const WARPED_EDGE_PIECES: f32 = 24.0;
 
 /// Shape of a surface within its four corners.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,16 +310,42 @@ impl Surface {
         Some(s)
     }
 
-    /// The shape's outline in canvas pixels.
-    pub fn outline(&self) -> Vec<Vec2> {
+    /// The mesh warp, if it bends anything.
+    pub fn active_warp(&self) -> Option<&Warp> {
+        self.warp.as_ref().filter(|w| w.is_valid() && !w.is_identity())
+    }
+
+    /// Unit square → canvas pixels: the mesh warp (if any), then the corners'
+    /// perspective. Everything drawn in surface uv goes through this.
+    pub fn to_canvas(&self) -> impl Fn(Vec2) -> Vec2 + '_ {
         let h = Homography::from_corners(self.corners);
-        outline_uv(self.mask, &self.path).into_iter().map(|p| h.map(p)).collect()
+        let warp = self.active_warp();
+        move |uv| h.map(warp.map_or(uv, |w| w.map(uv)))
+    }
+
+    /// The shape's outline in canvas pixels. Under a mesh warp straight
+    /// edges bend, so they are split into short pieces first.
+    pub fn outline(&self) -> Vec<Vec2> {
+        let to_canvas = self.to_canvas();
+        let outline = outline_uv(self.mask, &self.path);
+        if self.active_warp().is_none() {
+            return outline.into_iter().map(to_canvas).collect();
+        }
+        let n = outline.len();
+        (0..n)
+            .flat_map(|i| {
+                let (a, b) = (outline[i], outline[(i + 1) % n]);
+                let pieces = ((a.distance(b) * WARPED_EDGE_PIECES).ceil() as usize).max(1);
+                (0..pieces).map(move |k| a.lerp(b, k as f32 / pieces as f32))
+            })
+            .map(to_canvas)
+            .collect()
     }
 
     /// Anchor points of a free-form surface in canvas pixels.
     pub fn path_on_canvas(&self) -> Vec<Vec2> {
-        let h = Homography::from_corners(self.corners);
-        self.path.iter().map(|p| h.map(p.pos)).collect()
+        let to_canvas = self.to_canvas();
+        self.path.iter().map(|p| to_canvas(p.pos)).collect()
     }
 
     /// Turns a built-in shape into editable anchor points. Free-form
@@ -399,6 +428,37 @@ mod tests {
 
     fn close(a: Vec2, b: Vec2) {
         assert!(a.distance(b) < 1e-3, "{a:?} != {b:?}");
+    }
+
+    /// A 100×100 quad at (100, 100) whose mesh pulls the top edge's middle up by 20 px.
+    fn bulging() -> Surface {
+        let mut s = Surface::rect(SurfaceId(1), "s", Vec2::new(100.0, 100.0), Vec2::splat(100.0));
+        let mut w = Warp::identity(3, 3);
+        w.points[1].y -= 0.2;
+        s.warp = Some(w);
+        s
+    }
+
+    #[test]
+    fn outline_and_hit_area_bend_with_the_mesh() {
+        let s = bulging();
+        let outline = s.outline();
+        assert!(outline.len() > 4, "edges are split so they can bend");
+        // The top edge's middle is now at y = 80; the corners stay put.
+        assert!(outline.iter().any(|p| p.distance(Vec2::new(150.0, 80.0)) < 0.5), "{outline:?}");
+        assert!(outline.iter().any(|p| p.distance(Vec2::new(100.0, 100.0)) < 1e-3));
+        // Above the old top edge, inside the bulge: part of the surface now.
+        assert!(point_in_polygon(Vec2::new(150.0, 90.0), &outline));
+        assert!(!point_in_polygon(Vec2::new(150.0, 90.0), &Surface { warp: None, ..s.clone() }.outline()));
+    }
+
+    #[test]
+    fn untouched_meshes_are_ignored() {
+        let mut s = bulging();
+        s.warp = Some(Warp::identity(5, 5));
+        assert!(s.active_warp().is_none());
+        assert_eq!(s.outline().len(), 4, "no subdivision needed");
+        close(s.to_canvas()(Vec2::splat(0.5)), Vec2::splat(150.0));
     }
 
     #[test]

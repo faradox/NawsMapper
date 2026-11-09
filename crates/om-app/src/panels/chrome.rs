@@ -109,6 +109,10 @@ pub fn menu_bar(ui: &mut Ui, app: &mut NawsMapperApp) {
                 if item(ui, "Edit Points", None, app.editor.selection.surfaces.len() == 1) {
                     app.act(Action::EditPoints);
                 }
+                let label = if app.editor.mesh.is_some() { "Done Bending" } else { "Mesh Warp" };
+                if item(ui, label, Some(&shortcuts::MESH), has_sel) {
+                    app.act(if app.editor.mesh.is_some() { Action::ExitMesh } else { Action::EditMesh });
+                }
                 ui.separator();
                 let label = if app.editor.transform.is_some() { "Apply Transform" } else { "Free Transform" };
                 if item(ui, label, Some(&shortcuts::FREE_TRANSFORM), has_sel) {
@@ -295,6 +299,14 @@ pub fn toolbar(ui: &mut Ui, app: &mut NawsMapperApp) {
                     .clicked()
                 {
                     app.act(Action::FreeTransform);
+                }
+                let bending = app.editor.mesh.is_some();
+                if ui
+                    .add_enabled(has_sel, Button::new("⌗ Warp").selected(bending))
+                    .on_hover_text("Mesh Warp: bend the surface onto curved objects (W)")
+                    .clicked()
+                {
+                    app.act(if bending { Action::ExitMesh } else { Action::EditMesh });
                 }
             }
             ui.separator();

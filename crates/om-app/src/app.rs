@@ -6,10 +6,11 @@ use std::time::Instant;
 
 use egui::{Key, KeyboardShortcut, Modifiers};
 use glam::Vec2;
-use om_core::{FILE_EXTENSION, Generator, Mask, Project, SourceId, SourceKind};
+use om_core::{CueId, FILE_EXTENSION, Generator, Mask, Project, SourceId, SourceKind};
 use om_render::{Renderer, VIDEO_EXTENSIONS};
 
 use crate::backdrop::BackdropImage;
+use crate::cues::CuePlayer;
 use crate::dialogs::{self, FileDialogs, Kind, Prompt, PromptAnswer, Purpose, Then};
 use crate::displays::DisplayChoice;
 use crate::document::Document;
@@ -51,9 +52,14 @@ pub mod shortcuts {
     /// In Show mode only, so a stray key while editing never blacks out the wall.
     pub const BLACKOUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::B);
     pub const FREEZE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F);
+    /// In Show mode: play the next cue (like QLab). In the editor Space is play/pause.
+    pub const GO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::Space);
+    /// In Show mode: finish a running fade at once and cancel auto-follow.
+    pub const STOP_CUE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::Escape);
     pub const ADD_QUAD: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::Q);
     pub const FREE_TRANSFORM: KeyboardShortcut = KeyboardShortcut::new(CMD, Key::T);
     pub const PEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::P);
+    pub const MESH: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
     pub const LIBRARY: KeyboardShortcut = KeyboardShortcut::new(CMD, Key::L);
 }
 
@@ -108,6 +114,18 @@ pub enum Action {
     EditPoints,
     ExitPoints,
     DeletePoint,
+    /// W: bend the selected surface with a mesh (adds one if needed).
+    EditMesh,
+    ExitMesh,
+    /// Straighten the selected surfaces' meshes (keeping the grid size).
+    ResetMesh,
+    RemoveMesh,
+    /// Change the grid size of the selected surfaces' meshes, keeping their shape.
+    ResizeMesh {
+        cols: usize,
+        rows: usize,
+    },
+    SetMeshSmooth(bool),
     ToggleLibrary,
     /// Add shader library preset `index` as a source; with `apply`, also
     /// show it on the selected surfaces.
@@ -129,6 +147,18 @@ pub enum Action {
     PackageProject,
     ChooseBackdrop,
     RemoveBackdrop,
+    /// Remember how all surfaces look now as a new cue.
+    RecordCue,
+    UpdateCue(CueId),
+    DeleteCue(CueId),
+    MoveCue(CueId, i32),
+    /// Play the next cue.
+    Go,
+    GoTo(CueId),
+    /// Finish the running fade now and cancel auto-follow.
+    StopCue,
+    /// Choose the cue GO plays next (and whose settings the panel shows).
+    SelectCue(Option<CueId>),
 }
 
 pub struct Transport {
@@ -160,6 +190,7 @@ pub struct NawsMapperApp {
     /// Show mode: the editor is locked and replaced by the show view.
     pub show_mode: bool,
     pub backdrop: BackdropImage,
+    pub cues: CuePlayer,
     render_state: egui_wgpu::RenderState,
     output_tex: egui::TextureId,
     output_generation: u64,
@@ -229,6 +260,7 @@ impl NawsMapperApp {
             stagger_step: 0.25,
             show_mode: false,
             backdrop: BackdropImage::default(),
+            cues: CuePlayer::default(),
             render_state,
             output_tex,
             output_generation: 0,
@@ -283,6 +315,12 @@ impl NawsMapperApp {
                 if i.consume_shortcut(&FREEZE) {
                     acts.push(Action::ToggleFreeze);
                 }
+                if i.consume_shortcut(&GO) {
+                    acts.push(Action::Go);
+                }
+                if i.consume_shortcut(&STOP_CUE) {
+                    acts.push(Action::StopCue);
+                }
                 // Every other key is dropped: a stray press must not change the show.
                 i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_)));
             });
@@ -293,6 +331,7 @@ impl NawsMapperApp {
         let transforming = self.editor.transform.is_some();
         let pen = self.editor.pen.is_some();
         let points = self.editor.points.is_some();
+        let mesh = self.editor.mesh.is_some();
         let mut acts = Vec::new();
         ctx.input_mut(|i| {
             // Order matters: shortcuts with Shift must be checked first.
@@ -332,6 +371,7 @@ impl NawsMapperApp {
                 (ADD_QUAD, Action::AddSurface(Mask::Quad)),
                 (FREE_TRANSFORM, Action::FreeTransform),
                 (PEN, Action::Pen),
+                (MESH, Action::EditMesh),
             ];
             for (sc, a) in table {
                 if i.consume_shortcut(sc) {
@@ -348,7 +388,10 @@ impl NawsMapperApp {
             if i.consume_key(Modifiers::SHIFT, Key::Minus) {
                 acts.push(Action::CycleBlend(-1));
             }
-            if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace) {
+            let delete =
+                i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace);
+            // In Mesh Warp, Delete would remove the surface being bent: ignore it.
+            if delete && !mesh {
                 acts.push(if pen {
                     Action::RemovePenPoint
                 } else if points {
@@ -362,6 +405,8 @@ impl NawsMapperApp {
                     Action::CancelPen
                 } else if points {
                     Action::ExitPoints
+                } else if mesh {
+                    Action::ExitMesh
                 } else if transforming {
                     Action::CancelTransform
                 } else {
@@ -373,6 +418,8 @@ impl NawsMapperApp {
                     acts.push(Action::FinishPen);
                 } else if points {
                     acts.push(Action::ExitPoints);
+                } else if mesh {
+                    acts.push(Action::ExitMesh);
                 } else if transforming {
                     acts.push(Action::ApplyTransform);
                 }
@@ -431,6 +478,7 @@ impl NawsMapperApp {
                     | Action::EditPoints
                     | Action::ToggleShowMode
                     | Action::MatchCanvasToProjector
+                    | Action::EditMesh
             )
         {
             self.editor.apply_transform();
@@ -451,9 +499,28 @@ impl NawsMapperApp {
                 | Action::FreeTransform
                 | Action::ToggleShowMode
                 | Action::MatchCanvasToProjector
+                | Action::EditMesh
         ) {
             self.editor.finish_pen();
             self.editor.points = None;
+        }
+        // Other tools and documents end mesh editing.
+        if matches!(
+            action,
+            Action::NewDemo
+                | Action::NewEmpty
+                | Action::Open
+                | Action::Undo
+                | Action::Redo
+                | Action::SelectAll
+                | Action::Delete
+                | Action::FreeTransform
+                | Action::Pen
+                | Action::EditPoints
+                | Action::ToggleShowMode
+                | Action::RemoveMesh
+        ) {
+            self.editor.mesh = None;
         }
         match action {
             Action::NewDemo => self.guard(ctx, frame, Then::NewDemo),
@@ -582,6 +649,9 @@ impl NawsMapperApp {
             Action::EditPoints => {
                 let target = self.editor.selection.primary().and_then(|id| self.doc.project.surface_mut(id));
                 match target {
+                    Some(s) if s.warp.is_some() => {
+                        self.set_status("Edit Points works on unwarped shapes: remove the mesh warp first")
+                    }
                     Some(s) if !s.locked => {
                         s.make_freeform();
                         let id = s.id;
@@ -597,6 +667,31 @@ impl NawsMapperApp {
                     self.set_status("Select a point first. A shape keeps at least three points.");
                 }
             }
+            Action::EditMesh => {
+                let target = self.editor.selection.primary().and_then(|id| self.doc.project.surface_mut(id));
+                match target {
+                    Some(s) if !s.locked => {
+                        s.warp.get_or_insert_with(om_core::Warp::default);
+                        let id = s.id;
+                        self.editor.edit_mesh(id);
+                    }
+                    Some(_) => self.set_status("The surface is locked"),
+                    None => self.set_status("Select a surface to bend it with a mesh"),
+                }
+            }
+            Action::ExitMesh => self.editor.mesh = None,
+            Action::ResetMesh => self.each_mesh(&sel, |w| {
+                *w = om_core::Warp { smooth: w.smooth, ..om_core::Warp::identity(w.cols, w.rows) }
+            }),
+            Action::RemoveMesh => {
+                for id in &sel {
+                    if let Some(s) = self.doc.project.surface_mut(*id).filter(|s| !s.locked) {
+                        s.warp = None;
+                    }
+                }
+            }
+            Action::ResizeMesh { cols, rows } => self.each_mesh(&sel, |w| *w = w.resized(cols, rows)),
+            Action::SetMeshSmooth(smooth) => self.each_mesh(&sel, |w| w.smooth = smooth),
             Action::ToggleLibrary => self.library.open = !self.library.open,
             Action::ToggleShowMode => {
                 self.show_mode = !self.show_mode;
@@ -653,6 +748,38 @@ impl NawsMapperApp {
                 self.dialogs.start(ctx, Purpose::ChooseBackdrop, dialog, Kind::PickFile);
             }
             Action::RemoveBackdrop => self.doc.project.canvas.backdrop.path = None,
+            Action::RecordCue => {
+                let id = self.doc.record_cue(self.cues.selected.or(self.cues.live));
+                // You are "in" the cue you just recorded.
+                self.cues.live = Some(id);
+                self.cues.selected = None;
+                let name = self.doc.project.cue(id).map(|c| c.name.clone()).unwrap_or_default();
+                self.set_status(format!("Recorded \"{name}\": how all surfaces look now"));
+            }
+            Action::UpdateCue(id) => {
+                self.doc.update_cue(id);
+                self.set_status("Cue updated with the current look");
+            }
+            Action::DeleteCue(id) => {
+                self.doc.delete_cue(id);
+                if self.cues.live == Some(id) {
+                    self.cues.live = None;
+                }
+                if self.cues.selected == Some(id) {
+                    self.cues.selected = None;
+                }
+            }
+            Action::MoveCue(id, dir) => self.doc.move_cue(id, dir),
+            Action::Go => match self.cues.next(&self.doc.project) {
+                Some(id) => self.go_cue(id),
+                None if self.doc.project.cues.is_empty() => {
+                    self.set_status("No cues yet: set up a look and click ● Record")
+                }
+                None => self.set_status("That was the last cue"),
+            },
+            Action::GoTo(id) => self.go_cue(id),
+            Action::StopCue => self.cues.stop(),
+            Action::SelectCue(id) => self.cues.selected = id,
             Action::UsePreset { index, apply } => {
                 let Some(preset) = self.library.presets.get(index) else { return };
                 let (name, generator) = (preset.name, preset.generator.clone());
@@ -748,7 +875,33 @@ impl NawsMapperApp {
         Some((job.copied.load(std::sync::atomic::Ordering::Relaxed), job.plan_summary.files))
     }
 
+    fn go_cue(&mut self, id: CueId) {
+        if self.cues.go(&mut self.doc.project, id, Instant::now())
+            && let Some(i) = self.doc.project.cue_index(id)
+        {
+            let name = self.doc.project.cues[i].name.clone();
+            self.set_status(format!("▶ {} {name}", i + 1));
+        }
+    }
+
+    /// Applies `f` to the mesh of every selected, unlocked surface that has one.
+    fn each_mesh(&mut self, ids: &[om_core::SurfaceId], f: impl Fn(&mut om_core::Warp)) {
+        for id in ids {
+            if let Some(w) =
+                self.doc.project.surface_mut(*id).filter(|s| !s.locked).and_then(|s| s.warp.as_mut())
+            {
+                f(w);
+            }
+        }
+    }
+
     fn nudge(&mut self, delta: Vec2) {
+        if self.editor.mesh.is_some() {
+            if !self.editor.nudge_mesh_point(&mut self.doc.project, delta) {
+                self.set_status("Click a mesh point first");
+            }
+            return;
+        }
         if self.editor.points.is_some() {
             self.editor.nudge_point(&mut self.doc.project, delta);
             return;
@@ -894,6 +1047,8 @@ impl NawsMapperApp {
         self.editor.transform = None;
         self.editor.pen = None;
         self.editor.points = None;
+        self.editor.mesh = None;
+        self.cues.reset();
         self.doc = doc;
         self.editor.selection.clear();
         self.editor.selected_source = None;
@@ -965,7 +1120,9 @@ impl NawsMapperApp {
     // ---- Frame -------------------------------------------------------------
 
     fn render_output(&mut self) {
-        self.renderer.render(&self.doc.project, self.transport.time);
+        // During a cue fade the projector shows the crossfade, not the document.
+        let project = self.cues.render_project(&self.doc.project, Instant::now());
+        self.renderer.render(&project, self.transport.time);
         if self.renderer.output_generation() != self.output_generation {
             self.output_generation = self.renderer.output_generation();
             self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
@@ -1065,6 +1222,10 @@ impl eframe::App for NawsMapperApp {
             self.finish_dialog(&ctx, frame, purpose, paths);
         }
         self.poll_package();
+        let now = Instant::now();
+        if let Some(id) = self.cues.due(&self.doc.project, now) {
+            self.go_cue(id);
+        }
         self.backdrop.sync(&ctx, self.doc.project.canvas.backdrop.path.as_deref());
         self.render_output();
 
@@ -1076,6 +1237,7 @@ impl eframe::App for NawsMapperApp {
             panels::status_bar(ui, self);
             panels::left_panel(ui, self);
             panels::properties_panel(ui, self);
+            panels::cues_panel(ui, self);
             egui::CentralPanel::no_frame().show(ui, |ui| {
                 let rect = ui.max_rect();
                 self.editor.ui(ui, &mut self.doc.project, self.output_tex, self.backdrop.get());
@@ -1100,6 +1262,7 @@ impl eframe::App for NawsMapperApp {
                 pointer: if self.show_mode { None } else { self.editor.pointer },
                 show_mode: self.show_mode,
                 frozen: self.frozen(),
+                mesh: self.editor.mesh,
             },
         );
 
@@ -1123,7 +1286,10 @@ impl eframe::App for NawsMapperApp {
         self.update_title(&ctx);
         self.handle_close(&ctx, frame);
 
-        if self.transport.playing || self.package.is_some() {
+        if let Some(s) = self.cues.follow_in(now) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f32(s));
+        }
+        if self.transport.playing || self.package.is_some() || self.cues.progress(now).is_some() {
             ctx.request_repaint();
         } else if self.output.open && self.output.display.is_some() {
             // Notice the chosen projector being plugged in, even while idle.

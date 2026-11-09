@@ -53,6 +53,9 @@ updated with every change. Previous versions are under
   points with **Edit Points**: drag points, click an edge to add one, curve or corner points.
 - **Free Transform** (`Cmd+T`): scale, rotate and move one or many surfaces with a
   bounding box, just like Photoshop (Shift = proportional / 15° steps, Alt = from center).
+- **Mesh Warp** (`W`): bend a surface onto columns, arches and round objects with a grid
+  of up to 12 × 12 points, smooth curves through the points or straight lines between
+  them. Shapes, borders and textures bend along; the corners still pin the surface.
 - **Cutouts**: a shape that cuts a hole in every surface below it (windows, doors,
   anything in front of the wall). Works with ellipse/triangle shapes, feather and opacity.
 - **Corner snapping** and **welded corners**: faces that share a corner move together,
@@ -84,9 +87,13 @@ updated with every change. Previous versions are under
   projector's resolution, so the picture is pixel-exact. Optional outlines on the
   projector help with aligning corners on the real object, and **Show Mouse on
   Projector** draws the pointer on the projection while you point at the canvas.
+- **Cues**: record looks (sources, colors, opacity, animation, visibility) and play them
+  in order with **GO**: numbers glide, everything else crossfades, each cue with its own
+  fade time and optional auto-follow.
 - **Show mode** (`Cmd+Shift+Enter`): editing locked, nothing but the picture on the
-  projector, stray keys ignored, quitting asks first. **Blackout** with an adjustable
-  fade (`B`) and **Freeze** (`F`): hold the picture while you fix something.
+  projector, stray keys ignored, quitting asks first. `Space` plays the next cue.
+  **Blackout** with an adjustable fade (`B`) and **Freeze** (`F`): hold the picture
+  while you fix something.
 - **Prepare at home**: map over a **venue photo** (shown in the editor only), **export a
   mapping template** (PNG or SVG with every surface's outline, number and name) to
   design content that fits, and **Package Project** into a folder with copies of all
@@ -136,6 +143,9 @@ macOS bundles (built by GitHub Actions) and Windows, and
 | `F`, double-click, `Esc` | (in output window) full screen on / toggle / off |
 | `Cmd+Shift+Enter` | Show mode on / off |
 | `B` / `F` | (in Show mode) Blackout / Freeze |
+| `Space` / `Esc` | (in Show mode) GO: play the next cue / finish the fade now |
+| `W` | Mesh Warp on the selected surface (`Enter` or `Esc` when done) |
+| Double-click a warped surface | Edit its mesh |
 
 `Cmd` is `Ctrl` on Linux and Windows.
 

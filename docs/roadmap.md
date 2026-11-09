@@ -59,6 +59,18 @@ fade, Freeze, images decoded off the UI thread, autosave and crash recovery; ven
 photo, mapping template export (PNG/SVG), Package Project. Tracker:
 [trackers/0009-show-ready-prep-kit.md](trackers/0009-show-ready-prep-kit.md).
 
+## ✅ Mesh warp (done, P1-3)
+
+Bend a surface with a grid of up to 12 × 12 points (smooth or straight), drawn as a
+tessellated mesh with perspective-correct texturing; shapes, borders and textures bend
+along. Tracker: [trackers/0010-mesh-warp.md](trackers/0010-mesh-warp.md).
+
+## ✅ Cues (done, P1-4)
+
+Record looks, play them in order with GO (Space in Show mode): numbers glide, the rest
+crossfades; fade time and auto-follow per cue. Tracker:
+[trackers/0011-cues.md](trackers/0011-cues.md).
+
 ## Next candidates (pick from feedback)
 
 What professional mappers expect, compared with MadMapper, Resolume, Millumin and
@@ -80,15 +92,17 @@ HeavyM, with a prioritized list: [pro-features.md](pro-features.md).
 
 ### Animation (the main differentiator)
 - **Timeline with keyframes** for any property (opacity, corners, colors…), with easing
-  curves. Clips and cues.
+  curves. Clips; cues as markers on it.
 - Tempo: BPM, tap tempo, LFO rates in beats, audio-reactive modulation (FFT bands).
 - Modulation matrix: route any LFO/audio band to any parameter.
 - Transitions between sources (fade, wipe, dissolve).
-- Scenes/cues: snapshot surface states and crossfade between them.
+- Cues, next steps: GO from MIDI/OSC (P2-3), cues that only touch some surfaces,
+  per-cue fade curves, timecode triggers.
 
 ### Geometry
 - Bézier handles on free-form points; shapes with holes; boolean shape operations.
-- Mesh warp (grid subdivision) for curved objects.
+- Mesh warp, next steps: Bézier handles on mesh points, output-level warp (needed for
+  multi-projector, P2-1), warping combined with Edit Points.
 - Groups (Photoshop-style layer folders) with group transforms.
 - Numeric entry in the Free Transform readout (type W/H/angle), Distort/Perspective modes.
 - Align and distribute.

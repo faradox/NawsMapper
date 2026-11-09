@@ -9,7 +9,9 @@ use crate::Color;
 pub use crate::anim::TextureTransform;
 use crate::anim::{Animation, Lfo, Wave};
 use crate::border::Border;
+use crate::cue::{Cue, CueId};
 use crate::shape::{Mask, PathPoint};
+use crate::warp::Warp;
 
 /// Bumped whenever the on-disk format changes incompatibly.
 pub const FORMAT_VERSION: u32 = 1;
@@ -704,6 +706,9 @@ pub struct Surface {
     /// Cutout: instead of drawing its source, the surface punches a hole in
     /// every surface below it (showing the canvas background).
     pub cutout: bool,
+    /// Mesh warp for curved objects; bends the unit square before the
+    /// corners pin it (see `om_core::warp`).
+    pub warp: Option<Warp>,
 }
 
 impl Default for Surface {
@@ -732,6 +737,7 @@ impl Surface {
             texture: TextureTransform::default(),
             animation: Animation::default(),
             cutout: false,
+            warp: None,
         }
     }
 
@@ -756,6 +762,8 @@ pub struct Project {
     pub sources: Vec<Source>,
     /// Draw order: index 0 is at the back.
     pub surfaces: Vec<Surface>,
+    /// The show's cue list, played in order with GO.
+    pub cues: Vec<Cue>,
     pub next_id: u64,
 }
 
@@ -772,6 +780,7 @@ impl Project {
             canvas: Canvas::default(),
             sources: Vec::new(),
             surfaces: Vec::new(),
+            cues: Vec::new(),
             next_id: 1,
         }
     }
@@ -784,6 +793,18 @@ impl Project {
 
     pub fn new_surface_id(&mut self) -> SurfaceId {
         SurfaceId(self.alloc_id())
+    }
+
+    pub fn new_cue_id(&mut self) -> CueId {
+        CueId(self.alloc_id())
+    }
+
+    pub fn cue(&self, id: CueId) -> Option<&Cue> {
+        self.cues.iter().find(|c| c.id == id)
+    }
+
+    pub fn cue_index(&self, id: CueId) -> Option<usize> {
+        self.cues.iter().position(|c| c.id == id)
     }
 
     pub fn add_source(&mut self, name: impl Into<String>, kind: SourceKind) -> SourceId {

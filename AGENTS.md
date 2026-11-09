@@ -21,7 +21,7 @@ this first, then [docs/architecture.md](docs/architecture.md).
 
 | Crate | Purpose | May depend on |
 | --- | --- | --- |
-| `om-core` | Document model (`Project`, `Surface`, `Source`), shapes and free-form paths (`shape`), shader presets (`catalog`), perspective math, animation evaluation, undo history, multi-edit diff. Pure Rust, no GPU/UI. | glam, serde |
+| `om-core` | Document model (`Project`, `Surface`, `Source`), shapes and free-form paths (`shape`), mesh warp (`warp`), cues (`cue`), shader presets (`catalog`), perspective math, animation evaluation, undo history, multi-edit diff. Pure Rust, no GPU/UI. | glam, serde |
 | `om-media` | Video decoding: MP4 demux (`mp4`) + H.264 (`openh264`, built from source) on a thread per video. No GPU/UI. | mp4, openh264 |
 | `om-render` | wgpu compositor. Renders a `Project` at time *t* into one `Rgba8Unorm` texture. WGSL in `surface.wgsl`. Uploads video frames. | om-core, om-media, wgpu |
 | `om-app` | Binary `nawsmapper`. eframe/egui UI, canvas editor, projector window, file I/O dialogs. | everything |
@@ -97,7 +97,8 @@ read the source in `~/.cargo/registry/src/*/egui-0.37.0/` rather than going by m
    (a still copy of the texture) are the two deliberate exceptions; the venue photo is
    editor-only. See architecture.md, "Projector output and Show mode".
 2. **Animation is a pure function of time** (`om_core::anim::evaluate`). No hidden
-   per-frame state, so scrubbing, preview and output always agree.
+   per-frame state, so scrubbing, preview and output always agree. Show-control fades
+   (cue crossfades, Blackout) are the exception: they run on the wall clock.
 3. **Undo is snapshot-based.** UI code mutates `doc.project` freely. The app commits
    an undo step when the project changed and no pointer button is down
    (`Document::commit_if_changed`), so a drag becomes one step. Don't add manual
@@ -105,7 +106,10 @@ read the source in `~/.cargo/registry/src/*/egui-0.37.0/` rather than going by m
 4. **Multi-edit is generic.** The properties panel edits a copy of the primary
    surface, then `om_core::diff::propagate_changes` copies *only changed fields*
    to the other selected surfaces. New `Surface` fields work automatically, as long
-   as they are serde-serializable.
+   as they are serde-serializable. Cues (`om_core::cue`) work the same way: a new field
+   is part of every cue's look, unless it describes geometry or identity, in which
+   case add it to `NOT_IN_LOOKS`. Per-surface data that must never be copied between
+   surfaces (like a mesh warp) is changed through actions, not the Properties copy.
 5. **File compatibility.** Every serialized struct uses `#[serde(default)]`. Adding a
    field is fine; renaming or removing one needs a `FORMAT_VERSION` bump and a
    migration in `om_core::project`.
@@ -113,14 +117,17 @@ read the source in `~/.cargo/registry/src/*/egui-0.37.0/` rather than going by m
    actions; `NawsMapperApp::run_action` executes them. Shortcuts live in `app::shortcuts`.
    Use `Modifiers::COMMAND` (Cmd on macOS, Ctrl elsewhere).
 7. **Coordinates.** Surface corners are canvas pixels, order TL, TR, BR, BL ↔ UV
-   (0,0) (1,0) (1,1) (0,1), v pointing down. Colors are straight-alpha sRGB-encoded
-   `[f32; 4]`; the shader outputs premultiplied alpha.
+   (0,0) (1,0) (1,1) (0,1), v pointing down. Shapes, paths, borders and textures live
+   in that unit square; a mesh warp bends it before the corners pin it, so map
+   surface uv to canvas with `Surface::to_canvas`, never the bare homography. Colors
+   are straight-alpha sRGB-encoded `[f32; 4]`; the shader outputs premultiplied alpha.
 
 ## Common tasks
 
 - **New surface property:** add the field to `Surface` (with a default), use it in
   `om_render::surface_uniforms` + `surface.wgsl` if it affects rendering, and add a
-  control in `panels/properties.rs`. Multi-edit and undo come for free.
+  control in `panels/properties.rs`. Multi-edit, undo and cues come for free (if it is
+  geometry, add it to `om_core::cue::NOT_IN_LOOKS`).
 - **New shader (generator pattern):** add a variant to `Pattern` (and to `Pattern::ALL`,
   at the end, because the shader index is the position), a `label`, and a
   `detail_label` if it uses `detail`. Add a `case` in `field()` in `surface.wgsl`
@@ -141,10 +148,11 @@ read the source in `~/.cargo/registry/src/*/egui-0.37.0/` rather than going by m
   `NawsMapperApp::import_media`. Decoding that takes time belongs on a thread in `om-media`.
 - **New animation parameter:** extend `Animation` and apply it in `anim::evaluate`,
   with a unit test.
-- **New canvas tool/mode:** follow Free Transform (`transform.rs`) or the Pen / Edit
-  Points tools: pure math functions with unit tests (in `om-core` when the renderer
-  needs them too), state on `Editor`, `Drag` variants for its gestures, actions for
-  enter/apply/cancel, and leave the mode automatically when the selection changes.
+- **New canvas tool/mode:** follow Free Transform (`transform.rs`), the Pen / Edit
+  Points tools or Mesh Warp: pure math functions with unit tests (in `om-core` when the
+  renderer needs them too), state on `Editor`, `Drag` variants for its gestures,
+  actions for enter/apply/cancel, and leave the mode automatically when the selection
+  changes.
 - **New panel or action:** add an `Action` variant, handle it in `run_action`, and wire
   the menu item, shortcut and button.
 

@@ -79,7 +79,7 @@ sessions, **XL** more. They are guesses until each one gets a tracker.
   (like InDesign's Package), so it moves to the show computer without missing files.
 - *Why:* this is her Photoshop world, cheap to build, and pros use these on every job.
 
-**P1-3. Mesh warp** (M–L)
+**P1-3. Mesh warp** (M–L) — ✅ done (per surface; output-level warp comes with P2-1), [tracker 0010](trackers/0010-mesh-warp.md)
 - Grid warp per surface (2×2 up to e.g. 16×16 points), Bézier handles for smooth
   curves, add rows and columns, reset. Then the same warp on a whole output (needed by P2-1).
 - *Why:* curved and uneven objects (columns, arches, round sculptures, fabric) can't be
@@ -89,7 +89,7 @@ sessions, **XL** more. They are guesses until each one gets a tracker.
   (Catmull-Rom/Bézier patch evaluated in `om-core`, testable without a GPU). Shapes,
   borders and feather stay in UV space, so they follow the warp.
 
-**P1-4. Scenes and cues** (M)
+**P1-4. Scenes and cues** (M) — ✅ done, [tracker 0011](trackers/0011-cues.md)
 - Save the state of all (or selected) surfaces as a **cue**. A cue list with **GO**
   (Space or a click) and crossfade times; follow-on cues ("go to the next after 8 s").
 - *Why:* that's how a show is run (theatre, events, a facade loop). It also fits

@@ -4,6 +4,10 @@
 // four corners in canvas pixels; the fragment stage maps each pixel back to
 // the unit square with the inverse homography, which gives perspective-
 // correct texturing for any four-corner shape.
+//
+// A mesh-warped surface is drawn from a tessellated grid instead (`vs_mesh`):
+// each vertex carries its unit-square position, interpolated with correct
+// perspective, and everything after that is the same.
 
 struct SurfaceUniforms {
     corners0: vec4<f32>,   // p0.xy, p1.xy
@@ -22,7 +26,7 @@ struct SurfaceUniforms {
     misc: vec4<f32>,       // opacity, hue shift (turns), feather, mask
     pal: vec4<f32>,        // stop count, cyclic, detail, surface aspect (w / h)
     stops: array<vec4<f32>, 6>,
-    shape: vec4<f32>,      // outline point count, backdrop blend mode
+    shape: vec4<f32>,      // outline point count, backdrop blend mode, mesh (1 = drawn by vs_mesh)
     points: array<vec4<f32>, 64>, // outline in surface uv, two points per vec4
     border: vec4<f32>,     // border color (straight alpha)
     border_p: vec4<f32>,   // width px (0 = none), style, dash px, gap px
@@ -42,6 +46,8 @@ struct SurfaceUniforms {
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) canvas_px: vec2<f32>,
+    // Mesh surfaces only: the unit-square position (perspective-correct).
+    @location(1) suv: vec2<f32>,
 };
 
 @vertex
@@ -71,6 +77,21 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     var out: VsOut;
     out.pos = vec4<f32>(p.x / u.canvas.x * 2.0 - 1.0, 1.0 - p.y / u.canvas.y * 2.0, 0.0, 1.0);
     out.canvas_px = p;
+    out.suv = vec2<f32>(0.0);
+    return out;
+}
+
+// A vertex of a mesh-warped surface: canvas position in homogeneous
+// coordinates (x·w, y·w, w) and its unit-square position. Handing w to the
+// GPU makes it interpolate `suv` with the corners' perspective.
+@vertex
+fn vs_mesh(@location(0) hpos: vec3<f32>, @location(1) suv: vec2<f32>) -> VsOut {
+    let p = hpos.xy / hpos.z;
+    let ndc = vec2<f32>(p.x / u.canvas.x * 2.0 - 1.0, 1.0 - p.y / u.canvas.y * 2.0);
+    var out: VsOut;
+    out.pos = vec4<f32>(ndc * hpos.z, 0.0, hpos.z);
+    out.canvas_px = p;
+    out.suv = suv;
     return out;
 }
 
@@ -1411,17 +1432,28 @@ fn border_paint(suv: vec2<f32>, inside_px: f32) -> vec4<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let inv_h = mat3x3<f32>(u.inv_h0.xyz, u.inv_h1.xyz, u.inv_h2.xyz);
-    let hp = inv_h * vec3<f32>(in.canvas_px, 1.0);
-    let suv = hp.xy / hp.z;
-    // Beyond the quad's horizon (only reachable in a grown draw area) the
-    // mapping folds back; nothing is drawn there.
-    let in_front = hp.z > 0.0;
+    var suv: vec2<f32>;
+    var in_front: bool;
+    var canvas_px: vec2<f32>;
+    if u.shape.z > 0.5 {
+        // Mesh warp: the vertex stage did the mapping.
+        suv = in.suv;
+        in_front = true;
+        canvas_px = in.pos.xy;
+    } else {
+        let inv_h = mat3x3<f32>(u.inv_h0.xyz, u.inv_h1.xyz, u.inv_h2.xyz);
+        let hp = inv_h * vec3<f32>(in.canvas_px, 1.0);
+        suv = hp.xy / hp.z;
+        // Beyond the quad's horizon (only reachable in a grown draw area) the
+        // mapping folds back; nothing is drawn there.
+        in_front = hp.z > 0.0;
+        canvas_px = in.canvas_px;
+    }
 
     let mapping = u.canvas.w;
     var base_uv = suv;
     if mapping > 0.5 {
-        base_uv = in.canvas_px / u.canvas.xy;
+        base_uv = canvas_px / u.canvas.xy;
     }
     let uv_m = mat3x3<f32>(u.uv_m0.xyz, u.uv_m1.xyz, u.uv_m2.xyz);
     let tuv = (uv_m * vec3<f32>(base_uv, 1.0)).xy;

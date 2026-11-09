@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use glam::Vec2;
 use om_core::{
-    Generator, History, Mask, PathPoint, Pattern, Project, SourceId, SourceKind, Surface, SurfaceId,
+    Cue, CueId, Generator, History, Mask, PathPoint, Pattern, Project, SourceId, SourceKind, Surface,
+    SurfaceId,
 };
 
 pub struct Document {
@@ -223,6 +224,43 @@ impl Document {
         }
     }
 
+    // ---- Cues -------------------------------------------------------------
+
+    /// Records how every surface looks now as a new cue, after `after` (or
+    /// at the end of the list). Returns its id.
+    pub fn record_cue(&mut self, after: Option<CueId>) -> CueId {
+        let id = self.project.new_cue_id();
+        let name = (self.project.cues.len() + 1..)
+            .map(|n| format!("Cue {n}"))
+            .find(|n| !self.project.cues.iter().any(|c| &c.name == n))
+            .expect("unbounded");
+        let cue = Cue::record(id, name, &self.project);
+        let at = after.and_then(|a| self.project.cue_index(a)).map_or(self.project.cues.len(), |i| i + 1);
+        self.project.cues.insert(at, cue);
+        id
+    }
+
+    /// Replaces a cue's looks with the current ones (name, fade and follow stay).
+    pub fn update_cue(&mut self, id: CueId) {
+        let looks = Cue::record(id, "", &self.project).looks;
+        if let Some(i) = self.project.cue_index(id) {
+            self.project.cues[i].looks = looks;
+        }
+    }
+
+    pub fn delete_cue(&mut self, id: CueId) {
+        self.project.cues.retain(|c| c.id != id);
+    }
+
+    /// Moves a cue one place earlier (-1) or later (+1) in the list.
+    pub fn move_cue(&mut self, id: CueId, dir: i32) {
+        let Some(i) = self.project.cue_index(id) else { return };
+        let j = i as i64 + dir.signum() as i64;
+        if (0..self.project.cues.len() as i64).contains(&j) {
+            self.project.cues.swap(i, j as usize);
+        }
+    }
+
     pub fn assign_source(&mut self, ids: &[SurfaceId], source: Option<SourceId>) {
         for id in ids {
             if let Some(s) = self.project.surface_mut(*id) {
@@ -296,5 +334,32 @@ mod tests {
         let b = doc.add_surface(Mask::Quad);
         let copies = doc.duplicate(&[a]);
         assert_eq!(ids(&doc), vec![a.0, copies[0].0, b.0]);
+    }
+
+    #[test]
+    fn cues_are_recorded_in_place_named_and_updated() {
+        let mut doc = Document::new(Project::empty(), None);
+        let s = doc.add_surface(Mask::Quad);
+        let first = doc.record_cue(None);
+        let last = doc.record_cue(Some(first));
+        // Recorded after the first cue: goes between, named by count.
+        let between = doc.record_cue(Some(first));
+        let names: Vec<&str> = doc.project.cues.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Cue 1", "Cue 3", "Cue 2"]);
+        assert_eq!(doc.project.cues[1].id, between);
+        assert_eq!(doc.project.cues[2].id, last);
+
+        doc.project.surface_mut(s).unwrap().opacity = 0.25;
+        assert!(!doc.project.cue(first).unwrap().matches(&doc.project));
+        doc.update_cue(first);
+        assert!(doc.project.cue(first).unwrap().matches(&doc.project));
+        assert_eq!(doc.project.cue(first).unwrap().name, "Cue 1");
+
+        doc.move_cue(last, -1);
+        doc.move_cue(first, -1);
+        let order: Vec<CueId> = doc.project.cues.iter().map(|c| c.id).collect();
+        assert_eq!(order, [first, last, between], "first can't move further up");
+        doc.delete_cue(last);
+        assert_eq!(doc.project.cues.len(), 2);
     }
 }

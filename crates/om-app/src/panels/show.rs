@@ -15,6 +15,10 @@ pub fn show_view(ui: &mut Ui, app: &mut NawsMapperApp) {
             ui.label(RichText::new("● SHOW").strong().color(theme::LIVE));
             ui.label(RichText::new(app.doc.display_name()).strong());
             ui.separator();
+            if !app.doc.project.cues.is_empty() {
+                super::cues::go_button(ui, app);
+                ui.separator();
+            }
 
             let play = if app.transport.playing { "⏸ Pause" } else { "▶ Play" };
             if ui.button(play).clicked() {
@@ -70,7 +74,9 @@ pub fn show_view(ui: &mut Ui, app: &mut NawsMapperApp) {
             ui.separator();
             ui.label(
                 RichText::new(format!(
-                    "Editing is locked. {} blackout · {} freeze · {} exit Show mode",
+                    "Editing is locked. {} GO · {} finish fade · {} blackout · {} freeze · {} exit Show mode",
+                    key(&ctx, &shortcuts::GO),
+                    key(&ctx, &shortcuts::STOP_CUE),
                     key(&ctx, &shortcuts::BLACKOUT),
                     key(&ctx, &shortcuts::FREEZE),
                     key(&ctx, &shortcuts::SHOW_MODE)
@@ -79,6 +85,14 @@ pub fn show_view(ui: &mut Ui, app: &mut NawsMapperApp) {
             );
         });
     });
+
+    if !app.doc.project.cues.is_empty() {
+        egui::Panel::bottom("show_cues").show(ui, |ui| {
+            ui.add_space(4.0);
+            super::cues::cue_cards(ui, app, false);
+            ui.add_space(4.0);
+        });
+    }
 
     egui::CentralPanel::default().show(ui, |ui| {
         ui.label(RichText::new("ON THE PROJECTOR").small().strong().color(Color32::from_gray(160)));

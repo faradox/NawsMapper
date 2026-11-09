@@ -18,6 +18,9 @@
 //! - Edit Points (double-click a free-form shape): drag anchors, click an
 //!   edge to add one, Alt-click or Delete removes, double-click toggles
 //!   smooth/corner. The math lives in `om_core::shape`.
+//! - Mesh Warp (W, or double-click a warped surface): drag grid points to
+//!   bend the surface; the grid's corners stay the corner handles. The math
+//!   lives in `om_core::warp`.
 
 use egui::{Color32, Key, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2 as EVec2};
 use glam::{Affine2, Vec2};
@@ -87,15 +90,55 @@ impl Selection {
 
 enum Drag {
     None,
-    Pan { start_pan: EVec2 },
-    Move { origin: Vec2, start: Vec<(SurfaceId, [Vec2; 4])> },
-    Corner { origin: Vec2, targets: Vec<(SurfaceId, usize, Vec2)> },
-    Marquee { start: Pos2, base: Vec<SurfaceId> },
-    TfScale { start: Affine2, handle: Handle },
-    TfRotate { start: Affine2, from: Vec2 },
-    TfMove { start: Affine2, from: Vec2 },
-    PenPoint { index: usize, origin: Pos2 },
-    Anchor { id: SurfaceId, index: usize, start: Box<Surface> },
+    Pan {
+        start_pan: EVec2,
+    },
+    Move {
+        origin: Vec2,
+        start: Vec<(SurfaceId, [Vec2; 4])>,
+    },
+    Corner {
+        origin: Vec2,
+        targets: Vec<(SurfaceId, usize, Vec2)>,
+    },
+    Marquee {
+        start: Pos2,
+        base: Vec<SurfaceId>,
+    },
+    TfScale {
+        start: Affine2,
+        handle: Handle,
+    },
+    TfRotate {
+        start: Affine2,
+        from: Vec2,
+    },
+    TfMove {
+        start: Affine2,
+        from: Vec2,
+    },
+    PenPoint {
+        index: usize,
+        origin: Pos2,
+    },
+    Anchor {
+        id: SurfaceId,
+        index: usize,
+        start: Box<Surface>,
+    },
+    /// A mesh warp point, from its canvas position when the drag started.
+    MeshPoint {
+        id: SurfaceId,
+        index: usize,
+        origin: Vec2,
+    },
+}
+
+/// Mesh warp editing on one surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshEdit {
+    pub id: SurfaceId,
+    pub selected: Option<usize>,
 }
 
 /// Anchor point editing on one free-form surface.
@@ -126,6 +169,7 @@ pub struct Editor {
     /// A finished pen path; the app turns it into a surface.
     pub finished_pen: Option<Vec<PathPoint>>,
     pub points: Option<PointEdit>,
+    pub mesh: Option<MeshEdit>,
     /// Where the pointer is on the canvas (canvas px), while it is over the canvas view.
     pub pointer: Option<Vec2>,
     last_rect: Rect,
@@ -148,6 +192,7 @@ impl Default for Editor {
             pen: None,
             finished_pen: None,
             points: None,
+            mesh: None,
             pointer: None,
             last_rect: Rect::NOTHING,
         }
@@ -225,6 +270,25 @@ impl Editor {
         self.pen = None;
         self.selection.set(vec![id]);
         self.points = Some(PointEdit { id, selected: None });
+    }
+
+    /// Starts bending `id` with its mesh (which the caller has created).
+    pub fn edit_mesh(&mut self, id: SurfaceId) {
+        self.transform = None;
+        self.pen = None;
+        self.points = None;
+        self.selection.set(vec![id]);
+        self.mesh = Some(MeshEdit { id, selected: None });
+    }
+
+    /// Moves the selected mesh point by `delta` canvas pixels.
+    pub fn nudge_mesh_point(&mut self, project: &mut Project, delta: Vec2) -> bool {
+        let Some(MeshEdit { id, selected: Some(i) }) = self.mesh else { return false };
+        let Some(s) = project.surface_mut(id) else { return false };
+        if let Some(pos) = mesh_point_on_canvas(s, i) {
+            set_mesh_point(s, i, pos + delta);
+        }
+        true
     }
 
     /// Removes the selected anchor point. Returns false if there is none
@@ -339,8 +403,14 @@ impl Editor {
         {
             self.points = None;
         }
+        if let Some(me) = self.mesh
+            && (self.selection.surfaces != [me.id]
+                || project.surface(me.id).is_none_or(|s| s.warp.is_none() || s.locked || !s.visible))
+        {
+            self.mesh = None;
+        }
 
-        // Pen and point editing get the first say over presses.
+        // Pen, point and mesh editing get the first say over presses.
         let mut press_used = false;
         if resp.drag_started() && !(space || resp.dragged_by(egui::PointerButton::Middle)) {
             let start = press_origin.unwrap_or(rect.center());
@@ -364,6 +434,15 @@ impl Editor {
                 } else {
                     self.points = None;
                 }
+            } else if let Some(me) = self.mesh
+                && let Some(index) = project.surface(me.id).and_then(|s| hit_mesh_point(s, &xf, start))
+                // Corner handles keep priority (the grid's corners are the surface's).
+                && self.hit_corner(project, &xf, start).is_none()
+            {
+                self.mesh = Some(MeshEdit { selected: Some(index), ..me });
+                let origin = project.surface(me.id).and_then(|s| mesh_point_on_canvas(s, index));
+                self.drag = Drag::MeshPoint { id: me.id, index, origin: origin.unwrap_or_default() };
+                press_used = true;
             }
         }
         if !press_used && self.pen.is_some() {
@@ -561,6 +640,16 @@ impl Editor {
                         }
                     }
                 }
+                Drag::MeshPoint { id, index, origin } => {
+                    if let Some(p) = pointer {
+                        let pos = *origin + (xf.to_canvas(p) - xf.to_canvas(press_origin.unwrap_or(p)));
+                        if let Some(s) = project.surface_mut(*id)
+                            && !s.locked
+                        {
+                            set_mesh_point(s, *index, pos);
+                        }
+                    }
+                }
                 Drag::None => {}
             }
         }
@@ -581,12 +670,22 @@ impl Editor {
             }
         } else if resp.double_clicked()
             && let Some(id) = resp.interact_pointer_pos().and_then(|p| hit_surface(project, xf.to_canvas(p)))
-            && project.surface(id).is_some_and(|s| s.mask == Mask::Freeform)
+            && project.surface(id).is_some_and(|s| s.warp.is_some() || s.mask == Mask::Freeform)
         {
-            self.edit_points(id);
+            if project.surface(id).is_some_and(|s| s.warp.is_some()) {
+                self.edit_mesh(id);
+            } else {
+                self.edit_points(id);
+            }
         } else if resp.clicked() {
             let p = resp.interact_pointer_pos().unwrap_or(rect.center());
-            if let Some((id, idx)) = self.hit_corner(project, &xf, p) {
+            let mesh_hit = self.mesh.and_then(|me| {
+                let i = project.surface(me.id).and_then(|s| hit_mesh_point(s, &xf, p))?;
+                Some(MeshEdit { selected: Some(i), ..me })
+            });
+            if let Some(me) = mesh_hit.filter(|_| self.hit_corner(project, &xf, p).is_none()) {
+                self.mesh = Some(me);
+            } else if let Some((id, idx)) = self.hit_corner(project, &xf, p) {
                 self.selection.corner = Some((id, idx));
             } else if let Some(id) = hit_surface(project, xf.to_canvas(p)) {
                 if toggle_mod {
@@ -615,6 +714,12 @@ impl Editor {
                 } else {
                     egui::CursorIcon::Default
                 }
+            } else if matches!(self.drag, Drag::MeshPoint { .. })
+                || self.mesh.is_some_and(|me| {
+                    project.surface(me.id).is_some_and(|s| hit_mesh_point(s, &xf, hp).is_some())
+                })
+            {
+                egui::CursorIcon::Crosshair
             } else if let Some(tf) = &self.transform {
                 tf_cursor(tf, &xf, &self.drag, hp)
             } else if matches!(self.drag, Drag::Corner { .. }) || self.hit_corner(project, &xf, hp).is_some()
@@ -681,6 +786,15 @@ impl Editor {
             hint(
                 "Edit Points: drag points · click an edge to add one · Alt-click or Delete removes · \
                   double-click a point for curve/corner · Enter or Esc when done",
+            );
+        }
+        if let Some(me) = self.mesh
+            && let Some(s) = project.surface(me.id)
+        {
+            draw_mesh(&painter, |c| xf.to_screen(c), s, me.selected, 1.0);
+            hint(
+                "Mesh Warp: drag the points to bend the surface · the corners still pin it · \
+                 arrows nudge the selected point · Enter or Esc when done",
             );
         }
         if let Some(tf) = &self.transform {
@@ -938,6 +1052,73 @@ fn nearest(candidates: &[Vec2], p: Vec2, max: f32) -> Option<(f32, Vec2)> {
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
 
+/// Canvas position of mesh point `index`.
+fn mesh_point_on_canvas(s: &Surface, index: usize) -> Option<Vec2> {
+    let p = *s.warp.as_ref()?.points.get(index)?;
+    Some(om_core::Homography::from_corners(s.corners).map(p))
+}
+
+/// Moves mesh point `index` to the canvas point `pos`. The grid's corners
+/// stay put: they are the surface's corners.
+fn set_mesh_point(s: &mut Surface, index: usize, pos: Vec2) {
+    let uv = om_core::Homography::from_corners(s.corners).unmap(pos);
+    if let Some(w) = &mut s.warp
+        && !w.is_corner(index)
+        && uv.is_finite()
+        && let Some(p) = w.points.get_mut(index)
+    {
+        *p = uv;
+    }
+}
+
+/// The mesh point (not a corner) near the screen point `p`.
+fn hit_mesh_point(s: &Surface, xf: &ViewXf, p: Pos2) -> Option<usize> {
+    let w = s.warp.as_ref()?;
+    w.canvas_points(s.corners)
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !w.is_corner(*i))
+        .map(|(i, c)| (xf.to_screen(*c).distance(p), i))
+        .filter(|(d, _)| *d <= ANCHOR_GRAB)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, i)| i)
+}
+
+/// The bent grid of a warped surface and its points (corners excepted: those
+/// are the corner handles). `to_screen` maps canvas px to the painter's space.
+pub fn draw_mesh(
+    painter: &egui::Painter,
+    to_screen: impl Fn(Vec2) -> Pos2,
+    s: &Surface,
+    selected: Option<usize>,
+    scale: f32,
+) {
+    let Some(w) = &s.warp else { return };
+    let to_canvas = s.to_canvas();
+    let line = Stroke::new(1.0 * scale, theme::ACCENT.linear_multiply(0.7));
+    const STEPS: usize = 40;
+    let draw = |from: Vec2, to: Vec2| {
+        let pts: Vec<Pos2> =
+            (0..=STEPS).map(|k| to_screen(to_canvas(from.lerp(to, k as f32 / STEPS as f32)))).collect();
+        painter.add(Shape::line(pts, line));
+    };
+    for r in 0..w.rows {
+        let v = r as f32 / (w.rows - 1) as f32;
+        draw(Vec2::new(0.0, v), Vec2::new(1.0, v));
+    }
+    for c in 0..w.cols {
+        let u = c as f32 / (w.cols - 1) as f32;
+        draw(Vec2::new(u, 0.0), Vec2::new(u, 1.0));
+    }
+    for (i, p) in w.canvas_points(s.corners).into_iter().enumerate() {
+        if w.is_corner(i) {
+            continue;
+        }
+        let fill = if selected == Some(i) { theme::ACCENT } else { Color32::WHITE };
+        painter.circle(to_screen(p), 4.5 * scale, fill, Stroke::new(1.5 * scale, theme::ACCENT));
+    }
+}
+
 /// Draws surface outlines, names and corner handles. Shared by the editor
 /// and (optionally) the projector output.
 pub fn draw_overlays(
@@ -1013,11 +1194,22 @@ pub fn draw_overlays(
 }
 
 /// Like [`draw_overlays`] but for a non-uniform stretch (output window).
-pub fn draw_output_overlays(painter: &egui::Painter, rect: Rect, project: &Project, selection: &Selection) {
+pub fn draw_output_overlays(
+    painter: &egui::Painter,
+    rect: Rect,
+    project: &Project,
+    selection: &Selection,
+    mesh: Option<MeshEdit>,
+) {
     let size = project.canvas.size();
     let map = |c: Vec2| {
         Pos2::new(rect.min.x + c.x / size.x * rect.width(), rect.min.y + c.y / size.y * rect.height())
     };
+    if let Some(me) = mesh
+        && let Some(s) = project.surface(me.id)
+    {
+        draw_mesh(painter, map, s, me.selected, (rect.height() / 720.0).clamp(1.0, 2.5));
+    }
     for s in project.surfaces.iter().filter(|s| s.visible) {
         let selected = selection.contains(s.id);
         let outline: Vec<Pos2> = s.outline().iter().map(|c| map(*c)).collect();
@@ -1046,6 +1238,34 @@ mod tests {
         p.surfaces.push(Surface::rect(a, "a", Vec2::new(100.0, 100.0), Vec2::new(100.0, 100.0)));
         p.surfaces.push(Surface::rect(b, "b", Vec2::new(200.0, 100.0), Vec2::new(100.0, 100.0)));
         p
+    }
+
+    fn warped() -> Surface {
+        let mut s = Surface::rect(om_core::SurfaceId(1), "w", Vec2::new(100.0, 100.0), Vec2::splat(100.0));
+        s.warp = Some(om_core::Warp::identity(3, 3));
+        s
+    }
+
+    #[test]
+    fn mesh_points_move_on_the_canvas_but_corners_stay() {
+        let mut s = warped();
+        assert_eq!(mesh_point_on_canvas(&s, 4), Some(Vec2::splat(150.0)));
+        set_mesh_point(&mut s, 4, Vec2::new(160.0, 140.0));
+        let p = mesh_point_on_canvas(&s, 4).unwrap();
+        assert!(p.distance(Vec2::new(160.0, 140.0)) < 1e-3, "{p}");
+        // A corner of the grid is the surface's corner: it doesn't move here.
+        set_mesh_point(&mut s, 0, Vec2::new(90.0, 90.0));
+        assert_eq!(mesh_point_on_canvas(&s, 0), Some(Vec2::new(100.0, 100.0)));
+    }
+
+    #[test]
+    fn mesh_hit_test_skips_corners() {
+        let s = warped();
+        let xf = ViewXf { origin: Pos2::ZERO, zoom: 1.0 };
+        assert_eq!(hit_mesh_point(&s, &xf, Pos2::new(152.0, 149.0)), Some(4));
+        assert_eq!(hit_mesh_point(&s, &xf, Pos2::new(150.0, 102.0)), Some(1));
+        assert_eq!(hit_mesh_point(&s, &xf, Pos2::new(100.0, 100.0)), None, "corner handle, not a mesh point");
+        assert_eq!(hit_mesh_point(&s, &xf, Pos2::new(125.0, 125.0)), None);
     }
 
     #[test]

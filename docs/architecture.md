@@ -101,6 +101,24 @@ it follows speed and time offset like everything else.
 Uniforms for all surfaces go into one buffer with dynamic offsets (2064 bytes per
 surface, padded to the device's offset alignment).
 
+**Mesh warp** (`om_core::warp`). A surface's optional `Warp` is a grid of control
+points in its unit square *before* the corners pin it: `canvas = H(warp(uv))`. The
+identity grid is a regular lattice. Smooth grids interpolate with Catmull-Rom splines
+(through every point, no handles), others bilinearly; past the edges the mesh
+continues in a straight line. Because masks, borders and textures are all computed in
+`uv`, they bend for free, and corners, Free Transform, snapping and welding keep
+working on the four corners with the mesh riding along. A warped surface can't be
+drawn as one quad with an inverse homography, so `Renderer::prepare_meshes`
+tessellates it on the CPU into a 48×48 grid (cached until the corners or mesh change,
+grown by a margin when the border paints outside) and draws it with the `vs_mesh`
+variant of its pipeline. Each vertex carries its homogeneous canvas position
+`(x·w, y·w, w)` and its `uv`, so the GPU interpolates `uv` with the corners'
+perspective; `fs_main` then takes `uv` from the vertex stage instead of the inverse
+homography (`shape.z = 1` in the uniforms) and everything after that is shared.
+On the CPU, `Surface::to_canvas` is the same mapping; `Surface::outline` splits edges
+so they bend, which keeps hit testing, overlays, `border_path` and the template export
+right.
+
 **Shader Library thumbnails** use the same pipeline: `Renderer::render_thumbnails`
 builds a throwaway project with one 192×120 tile per preset and draws it into a
 separate atlas texture, only while the library window is open.
@@ -209,6 +227,13 @@ and the drag state machine: `Pan | Move | Corner | Marquee | Tf* | PenPoint | An
   and center, within 10 screen px.
 - **Welding**: corners within 0.5 px of the dragged corner (on any unlocked surface)
   move with it. Arrow-key nudging respects welding too. Alt/Option bypasses both.
+- **Mesh Warp** (`Editor::mesh`, `Drag::MeshPoint`): control points are dragged in
+  canvas space and stored through the inverse homography. The grid's four corners are
+  not draggable here: they are the surface corners, whose handles keep priority. Edit
+  Points is refused on warped surfaces (its frame refit would move the corners under
+  the mesh). Properties changes the mesh through actions that touch each selected
+  surface's own mesh, never through multi-edit, which would copy one surface's grid
+  onto the others.
 
 ## Multi-selection editing
 
@@ -220,6 +245,23 @@ Result: changing *Opacity* on 12 surfaces leaves their different *Time offsets* 
 
 Operations that need different values per surface (e.g. **Stagger**) are explicit
 `Document` methods.
+
+## Cues
+
+`om_core::cue`: a `Cue` stores each surface's *look*, its serialized fields minus
+`NOT_IN_LOOKS` (id, name, locked, corners, mask, path, warp, cutout). Like multi-edit,
+it works on `serde_json` trees, so new `Surface` fields join cues automatically.
+Geometry or identity fields must be added to `NOT_IN_LOOKS`.
+
+Playback (`om-app/src/cues.rs`, `CuePlayer`): GO applies the cue to the document at
+once (an ordinary, undoable change) and starts a fade. While it runs,
+`render_output` renders `cue::crossfade(from, document, ease(t))` instead of the
+document. Floating-point numbers glide; anything else (source ids, enums, booleans,
+and the speeds under `animation`/`flow`, which would make time-based motion jump)
+draws the surface twice: the old look, and the new look on top with its opacity
+multiplied by `t` (fade-outs to invisible scale the old look instead). A GO during a
+fade starts from what is showing. Cue fades and auto-follow run on the wall clock, not
+the transport, so they work while the animation is paused.
 
 ## Persistence
 
@@ -235,7 +277,10 @@ Operations that need different values per surface (e.g. **Stagger**) are explici
 - One output. No edge blending or per-output color yet.
 - Video is H.264 only (no HEVC/ProRes/HAP yet), no audio, CPU decoding.
   No live camera, Syphon/Spout/NDI yet.
-- No mesh warp. Free-form shapes have at most 64 points and no Bézier handles
-  (smooth points are automatic). Shapes have no holes (a ring needs a cutout).
-- No timeline or keyframes. Animation is parametric (LFO/rates).
+- Free-form shapes have at most 64 points and no Bézier handles (smooth points are
+  automatic). Shapes have no holes (a ring needs a cutout). Edit Points and mesh warp
+  don't combine: shape first, then bend. Mesh warp is per surface; there is no
+  output-level warp yet (needed for multi-projector, P2-1).
+- No timeline or keyframes. Animation is parametric (LFO/rates); cues switch between
+  looks.
 - No mipmaps on image textures, so heavily minified images may shimmer.
