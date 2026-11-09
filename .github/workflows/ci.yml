@@ -1,21 +1,28 @@
 name: CI
 
+# Every push to main that passes all jobs updates the downloads on the Releases page
+# (see the "release" job and docs/releasing.md). Pull requests only build and test.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  # Compiled into the app and shown in Help → Version (crates/om-app/src/build_info.rs).
+  NAWSMAPPER_BUILD: ${{ github.run_number }}
+  NAWSMAPPER_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   check:
     name: Lint & test (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -29,35 +36,57 @@ jobs:
       - run: cargo test --locked
 
   macos:
-    name: macOS app bundle
+    name: macOS app
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
       - run: bash scripts/bundle-macos.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: NawsMapper-macos-universal
-          path: dist/NawsMapper-macos-universal.zip
-      - name: Attach to GitHub release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" dist/NawsMapper-macos-universal.zip --clobber
+          name: NawsMapper-macOS
+          path: dist/NawsMapper-macOS.dmg
+          if-no-files-found: error
 
   windows:
-    name: Windows build
+    name: Windows app
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked -p om-app
-      - uses: actions/upload-artifact@v4
+      - name: Name the download
+        shell: bash
+        run: mkdir -p dist && cp target/release/nawsmapper.exe dist/NawsMapper-Windows.exe
+      - uses: actions/upload-artifact@v7
         with:
-          name: NawsMapper-windows-x64
-          path: target/release/nawsmapper.exe
+          name: NawsMapper-Windows
+          path: dist/NawsMapper-Windows.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish downloads
+    needs: [check, macos, windows]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # One publish at a time; a newer waiting run replaces an older waiting one.
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # history and tags, for the "what's new" list
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - run: bash scripts/publish-release.sh dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod build_info;
 mod dialogs;
 mod document;
 mod editor;
@@ -18,6 +19,7 @@ fn main() -> eframe::Result {
         env_logger::Env::default().default_filter_or("warn,om_app=info,om_render=info"),
     )
     .init();
+    log::info!("NawsMapper {}", build_info::version_label());
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

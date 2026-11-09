@@ -2680,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "om-app"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -2698,7 +2698,7 @@ dependencies = [
 
 [[package]]
 name = "om-core"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "glam",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "om-media"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "log",
@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "om-render"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bytemuck",

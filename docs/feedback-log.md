@@ -20,6 +20,18 @@ Decisions:
 - → docs/trackers/NNNN-....md
 ```
 
+## 2026-11-09: getting new builds (raised by the maintainer)
+
+- To try a new version she had to open Actions, pick the latest run, scroll to the
+  artifacts and download a zip inside a zip. The Releases page was empty: a release
+  only appeared for a pushed `v*` tag, and none was ever pushed.
+
+Decisions:
+- Every green push to `main` publishes a development build on the Releases page; a
+  version bump publishes a numbered release. Permanent links, a disk image instead of a
+  zip, install help on the release page, build number in Help.
+  → [trackers/0008-releases.md](trackers/0008-releases.md)
+
 ## 2026-10-29: v0.5, borders and sidebar
 
 - Wants animated borders: "neon-light style gradient borders", "stars flowing around

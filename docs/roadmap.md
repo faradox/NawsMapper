@@ -45,6 +45,13 @@ Border effects (gradient, stars, comets, helix, fireworks), glow, inside/center/
 presets; long names no longer pin the Properties panel open. Tracker:
 [trackers/0007-animated-borders.md](trackers/0007-animated-borders.md).
 
+## ✅ Downloads on the Releases page (done)
+
+Every green push to `main` publishes a Mac disk image and a Windows `.exe` as the
+development build; bumping the version publishes a numbered release. Permanent download
+links, install help on every release page, build number in Help. Tracker:
+[trackers/0008-releases.md](trackers/0008-releases.md).
+
 ## Next candidates (pick from feedback)
 
 ### Output & show workflow
@@ -86,5 +93,6 @@ presets; long names no longer pin the Properties panel open. Tracker:
 
 ### macOS polish
 - Native menu bar (`muda`) and app icon, file associations (`.omap` double-click).
-- Notarized, signed builds.
+- Notarized, signed builds (removes the "Open Anyway" step on every new version).
+- In-app "a new version is available" notice, using the GitHub releases API.
 - Trackpad gestures refinement.

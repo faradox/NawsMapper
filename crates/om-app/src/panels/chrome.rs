@@ -151,7 +151,7 @@ pub fn menu_bar(ui: &mut Ui, app: &mut NawsMapperApp) {
             });
             ui.menu_button("Help", |ui| {
                 ui.label(RichText::new("NawsMapper").strong());
-                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                ui.label(format!("Version {}", crate::build_info::version_label()));
                 ui.separator();
                 ui.label("Space — play / pause (hold + drag to pan)");
                 ui.label("Q — add quad · P — pen · Arrows — nudge (Shift ×10)");

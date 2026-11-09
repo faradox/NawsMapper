@@ -22,6 +22,15 @@ with a face of the object. Then you fill the surfaces with **sources**
 | Right: **Properties** | Properties panel | Settings of the selected surface(s), or the canvas when nothing is selected. |
 | Toolbar | Options bar | Add shapes, play/pause, snapping, projector output. |
 
+## 0. Install NawsMapper
+
+Download the newest version for your Mac:
+[NawsMapper-macOS.dmg](https://github.com/faradox/NawsMapper/releases/latest/download/NawsMapper-macOS.dmg).
+Open it and drag **NawsMapper** onto **Applications**. The first time you open a new
+version, macOS asks for permission;
+[the release page](https://github.com/faradox/NawsMapper/releases/latest) shows the
+three clicks it takes. **Help** in the menu bar shows which version you have.
+
 ## 1. Set up the canvas
 
 Click empty space so nothing is selected. Properties then shows the **Canvas**.

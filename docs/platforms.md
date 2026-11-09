@@ -18,18 +18,22 @@ Built by GitHub Actions on `macos-latest` (see `.github/workflows/ci.yml`):
 
 - `scripts/bundle-macos.sh` builds `aarch64` and `x86_64`, merges them with `lipo`
   into a universal binary, wraps it in `NawsMapper.app` (Info.plist from
-  `packaging/macos/`), ad-hoc signs it and zips it.
-- Every push uploads the zip as a workflow artifact
-  (Actions → run → *NawsMapper-macos-universal*).
-- Pushing a `v*` tag also attaches the zip to a GitHub release.
+  `packaging/macos/`), ad-hoc signs it and packs it into `NawsMapper-macOS.dmg`, a disk
+  image that opens as the usual "drag NawsMapper onto Applications" window.
+- Every green push to `main` publishes the disk image on the Releases page.
+  [releasing.md](releasing.md) has the details and the permanent download links.
 
 ### First launch of an unsigned build
 
-The app is ad-hoc signed but **not notarized**, so Gatekeeper blocks a
-double-click on first launch. Either:
+The app is ad-hoc signed but **not notarized**, so Gatekeeper blocks the first launch of
+every new version:
 
-- right-click `NawsMapper.app` → **Open** → **Open**, or
-- run this once in Terminal:
+- **macOS 15 Sequoia and newer:** open the app, click **Done** in the warning, then
+  System Settings → **Privacy & Security** → scroll down → **Open Anyway** next to the
+  NawsMapper message, and confirm with the password. (Right-click → Open no longer
+  gets past the block on these versions.)
+- **macOS 14 Sonoma and older:** right-click `NawsMapper.app` → **Open** → **Open**.
+- Or, on any version, run this once in Terminal:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/NawsMapper.app
@@ -61,7 +65,9 @@ macOS would add HEVC/ProRes with hardware decoding (see roadmap).
 
 ## Windows
 
-CI builds `nawsmapper.exe` on `windows-latest` (artifact *NawsMapper-windows-x64*).
+CI builds `nawsmapper.exe` on `windows-latest` and publishes it as `NawsMapper-Windows.exe`
+next to the Mac download (see [releasing.md](releasing.md)). It isn't code-signed, so
+SmartScreen asks once: **More info** → **Run anyway**.
 
 To cross-compile from Linux, one option is the GNU target with MinGW:
 

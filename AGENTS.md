@@ -40,8 +40,11 @@ cargo test                     # includes WGSL validation through naga
 ```
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs fmt, clippy with
-`-D warnings` and tests on Linux. It builds a universal macOS `.app` (via
-`scripts/bundle-macos.sh`) and a Windows `.exe`. Keep all of them green.
+`-D warnings` and tests on Linux. It builds a universal macOS `.dmg` (via
+`scripts/bundle-macos.sh`) and a Windows `.exe`. Keep all of them green: every green
+push to `main` publishes them on the Releases page as the development build, and bumping
+the workspace `version` in `Cargo.toml` cuts a numbered release. See
+[docs/releasing.md](docs/releasing.md).
 
 ### Rules on the development machine
 

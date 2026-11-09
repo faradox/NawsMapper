@@ -9,9 +9,29 @@ animate them. The interface feels familiar to anyone who knows Photoshop.
 Written in Rust (egui + wgpu). macOS is the primary target; Linux is the
 development platform; Windows builds come for free.
 
-> Status: **v0.4.** Enough to map a box, a wall or a few shapes, fill them with
+> Status: **v0.6.** Enough to map a box, a wall or a few shapes, fill them with
 > shaders, images or video, and make them move. See [docs/roadmap.md](docs/roadmap.md)
 > for what comes next.
+
+## Download
+
+Free, no account, no installer wizard:
+
+- **Mac** (Apple Silicon and Intel, macOS 11 or newer):
+  [**NawsMapper-macOS.dmg**](https://github.com/faradox/NawsMapper/releases/latest/download/NawsMapper-macOS.dmg).
+  Open it and drag NawsMapper onto Applications.
+- **Windows** (64-bit):
+  [**NawsMapper-Windows.exe**](https://github.com/faradox/NawsMapper/releases/latest/download/NawsMapper-Windows.exe).
+  Just run it.
+
+NawsMapper isn't registered with Apple or Microsoft (that costs money every year), so the
+first start of each new version needs one extra permission click. The
+[release page](https://github.com/faradox/NawsMapper/releases/latest) shows how.
+
+Want the newest changes before they get a version number? The
+[development build](https://github.com/faradox/NawsMapper/releases/tag/dev-build) is
+updated with every change. Previous versions are under
+[all releases](https://github.com/faradox/NawsMapper/releases).
 
 ## Why another mapper?
 
@@ -80,7 +100,8 @@ match the box. [docs/user-guide.md](docs/user-guide.md) walks through it.
 
 Build requirements: Rust (stable, 1.95+). On Linux you also need the usual X11/Wayland
 dev libraries and Vulkan drivers. See [docs/platforms.md](docs/platforms.md) for
-macOS bundles (built by GitHub Actions) and Windows.
+macOS bundles (built by GitHub Actions) and Windows, and
+[docs/releasing.md](docs/releasing.md) for how the downloads are published.
 
 ## Keyboard
 
@@ -117,7 +138,7 @@ crates/
   om-app/     the desktop app: egui panels, canvas editor, projector window
 docs/         architecture, user guide, roadmap, platform notes, implementation trackers
 packaging/    macOS Info.plist
-scripts/      bundling scripts
+scripts/      macOS bundling, release publishing and release notes
 ```
 
 ## Documentation
@@ -127,6 +148,7 @@ scripts/      bundling scripts
 - [docs/user-guide.md](docs/user-guide.md): first projection, step by step
 - [docs/roadmap.md](docs/roadmap.md): where we're going
 - [docs/platforms.md](docs/platforms.md): macOS / Windows / Linux builds
+- [docs/releasing.md](docs/releasing.md): download links, cutting a release
 - [docs/feedback-log.md](docs/feedback-log.md): user feedback and the decisions it drove
 - [docs/trackers/](docs/trackers/): one implementation tracker per feature
 
